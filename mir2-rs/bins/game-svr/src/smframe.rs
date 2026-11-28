@@ -1399,8 +1399,14 @@ pub struct EnterWorldInputs {
     /// （oracle **无 `return`**，登录序照走完；宿主在登录尾段补发完后断连，
     /// 见 `drain_login_emergency_close`）。`false` = 未命中。
     pub emergency_close: bool,
-    /// **G1/G2**：版本门命中形态（堆装配与 `apply` 读同一份；`None` ⇒ 门静默）。
+    /// **G2**：版本门命中形态（堆装配与 `apply` 读同一份；`None` ⇒ 门静默）。
     pub version_gate: VersionGateHit,
+    /// **G4**：PayMent==1 分支的 GoldMax 覆盖值（`HumanTryModeMaxGold`）；`None` =
+    /// 分支未进入（PayMent≠1 或截断）。会话侧消费（`SessionGround.gold_max` 改写）。
+    pub try_mode_gold_cap: Option<i32>,
+    /// **G4**：踢人子支（`Abil.Level > TryModeLevel`）⇒ 槽 15/16 + emergency
+    /// （oracle **无 return**，登录序走完——与 G3 同机制）。
+    pub try_mode_kick: bool,
     /// **`openmir2-login-charstatus-657`**：`RecalcAbilitys()` 收尾两条 `RM_CHARSTATUSCHANGED`
     /// 的载荷 `(CharStatus, PlayObject.HitSpeed)`。
     ///
@@ -1460,6 +1466,13 @@ pub struct LoginSysMsgs {
     pub client_soft_version_too_old: Option<Vec<u8>>,
     /// **G2** 槽 10：`MessageSettings.DownLoadAndUseNewClient`（红字）。
     pub download_and_use_new_client: Option<Vec<u8>>,
+    /// **G4** 槽 14：`MessageSettings.YouNowIsTryPlayMode`（红字，PayMent==1 分支）。
+    pub you_now_is_try_play_mode: Option<Vec<u8>>,
+    /// **G4** 槽 15：踢支第 1 条——`"测试状态可以使用到第 {TryModeLevel}"`（oracle
+    /// **硬编码**，不走 MessageSettings）。
+    pub try_mode_level_notice: Option<Vec<u8>>,
+    /// **G4** 槽 16：踢支第 2 条——收费地址提示（oracle **硬编码**）。
+    pub try_mode_disconnect: Option<Vec<u8>>,
     /// `MsgColor.Blue` 的 `(BlueMsgFColor, BlueMsgBColor)`（缺省 0xFF/0xFC，
     /// `GameSvrConf.cs:1538-1539`）：槽 9 的 `SM_SYSMESSAGE.Param`。
     pub blue: (u8, u8),
@@ -1486,6 +1499,10 @@ impl LoginSysMsgs {
             // **G2**：槽 9 蓝、10 红；踢支 11/12/13 已在上面与 G1 共字段映射。
             9 => self.client_soft_version_too_old.as_deref(),
             10 => self.download_and_use_new_client.as_deref(),
+            // **G4**：槽 14/15/16 全红。
+            14 => self.you_now_is_try_play_mode.as_deref(),
+            15 => self.try_mode_level_notice.as_deref(),
+            16 => self.try_mode_disconnect.as_deref(),
             _ => None,
         }
     }
@@ -1498,7 +1515,7 @@ impl LoginSysMsgs {
         match slot {
             // G3 槽 4/5、G1 槽 6/7/8、G2 踢支 11/12/13 与 10 = 红；G2 槽 9 = **蓝**。
             9 => self.blue,
-            4..=8 | 10..=13 => self.red,
+            4..=8 | 10..=16 => self.red,
             _ => self.green,
         }
     }
@@ -1793,6 +1810,17 @@ impl EnterWorldInputs {
 
         // ⑤ RefShowName()→SendRefMsg(RM_USERNAME)：自己也在可见人类列表里（只占堆位）。
         queue.enqueue(LoginQueued::Username, PRIORITY_RM_USERNAME);
+        // ⑤b **G4 体验模式块**（`PlayObject.cs:1402-1415`）：PayMent==1 分支的两/三条——
+        //     槽 14（YouNowIsTryPlayMode）+ 踢支 15/16（硬编码）。入队门 = 分支证人
+        //     （`try_mode_gold_cap.is_some()` = PayMent==1 已进入；`try_mode_kick` = Level>
+        //     TryModeLevel 子支）。位置 = Username 之后、free_play 之前（oracle :1402 < :1417）。
+        if self.try_mode_gold_cap.is_some() {
+            queue.enqueue(LoginQueued::SysMsg(14), prio_sysmsg);
+        }
+        if self.try_mode_kick {
+            queue.enqueue(LoginQueued::SysMsg(15), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(16), prio_sysmsg);
+        }
         // ⑥ `PayMent==3`（`TestServer || ServiceMode`）的第四条 SysMsg：
         //    `NowIsFreePlayMode`（`PlayObject.cs:1417-1420`，位置在 `RefShowName` 之后）。
         if self.pay_ment_three {
@@ -2891,6 +2919,8 @@ mod tests {
             char_status: Some((0, 0)),
             emergency_close: false,
             version_gate: VersionGateHit::None,
+            try_mode_gold_cap: None,
+            try_mode_kick: false,
         }
     }
 
@@ -3082,6 +3112,8 @@ mod tests {
             char_status: Some((0, 0)),
             emergency_close: false,
             version_gate: VersionGateHit::None,
+            try_mode_gold_cap: None,
+            try_mode_kick: false,
         };
         let got: Vec<u16> = inputs
             .frames()
@@ -3144,6 +3176,8 @@ mod tests {
             char_status: Some((0, 0)),
             emergency_close: false,
             version_gate: VersionGateHit::None,
+            try_mode_gold_cap: None,
+            try_mode_kick: false,
         }
     }
 

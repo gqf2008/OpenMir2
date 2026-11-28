@@ -8297,7 +8297,8 @@ fn handle_ground_cmd(
             // `Dealing`（M3⑦-实现 3）：交易中禁拾取（`PlayObject.Base.cs:57`）。
             dealing,
             floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
-            human_max_gold: cfg.human_max_gold,
+            // **G4**：会话 GoldMax（PayMent==1 登录时改写为 HumanTryModeMaxGold）。
+            human_max_gold: sg.gold_max,
             // `Race == ActorRace.Play`（`SendAddItem` 仅在玩家时发）⇒ 恒真（本宿主只收玩家）。
             race_is_play: true,
             // `ClientPickUpItemIsOfGroup`（`PlayObject.Base.cs:38-54`）：M3⑦-实现 4 接上真注册表。
@@ -8551,6 +8552,10 @@ fn handle_deal_cmd(
     let other_name = other_chr.clone().unwrap_or_default();
 
     let events = {
+        // **G4**：对面会话的 GoldMax（在 `as_mut` 借用前取读）。
+        let other_gold_max = other_sg
+            .as_ref()
+            .map_or(cfg.human_max_gold, |sg| sg.gold_max);
         let (other_items, other_gold) = match other_sg.as_mut() {
             Some(sg) => (&mut sg.state.item_list, &mut sg.state.gold),
             None => (&mut dummy_ground.item_list, &mut dummy_ground.gold),
@@ -8561,7 +8566,8 @@ fn handle_deal_cmd(
             name: chr_name.to_string(),
             items: &mut me_sg.state.item_list,
             gold: &mut me_sg.state.gold,
-            gold_max: cfg.human_max_gold,
+            // **G4**：会话 GoldMax（PayMent==1 登录时被改写为 HumanTryModeMaxGold）。
+            gold_max: me_sg.gold_max,
             state: &mut me_tr,
         };
         let mut ot = game_svr::trade::DealSide {
@@ -8569,7 +8575,8 @@ fn handle_deal_cmd(
             name: other_name.clone(),
             items: other_items,
             gold: other_gold,
-            gold_max: cfg.human_max_gold,
+            // **G4**：对面会话的 GoldMax（无会话 ⇒ 配置缺省，与旧一致）。
+            gold_max: other_gold_max,
             state: other_tr_ref,
         };
         match ident {
@@ -30000,6 +30007,11 @@ struct SessionGround {
     storage: storage::StorageState,
     /// `BaseObject.ActorId`（`SM_SYSMESSAGE` 的 `Recog`）。
     actor_id: i32,
+    /// **G4**：`PlayObject.GoldMax`（`PlayObject.cs:1037` ctor = `Config.HumanMaxGold`，
+    /// 与本仓 `cfg.human_max_gold` 同源；`PayMent==1` 时 `:1409` 改写为
+    /// `HumanTryModeMaxGold`）。消费面 = 拾取/交易/命令卖出的 `inc_gold` 上限；
+    /// **脚本商店卖出上限（40511/41540 两处）仍读 `cfg`——登记：R 级另行接线。**
+    pub gold_max: i32,
     /// `PlayObject.UserAccount`（oracle 登录时从角色记录 `humData.Account` 装入、整会话不变；
     /// `CHECKACCOUNTLIST`/`DELACCOUNTLIST` 的唯一读源）。卡 `openmir2-script-user-account`。
     ///
@@ -35243,6 +35255,9 @@ struct SessionGroundInputs<'a> {
     canot_pick_up_item: &'a str,
     /// 构造时刻（oracle 各 ctor 的 `GetTickCount()`）。
     now: i64,
+    /// **G4/G3 批**：`PlayObject.GoldMax` 种子 = `Config.HumanMaxGold`（ctor `PlayObject.cs:1037`；
+    /// 生产传 `enter_cfg.ground.human_max_gold`，与既有各上限消费面同一 `cfg` 源）。
+    gold_max: i32,
 }
 
 /// **T-279**（卡 `openmir2-t283-wings-server`）：登录/重连时 `DressEffType` 的来源。
@@ -35327,6 +35342,8 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
         // `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
         // `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）。
         soft_version_date: i.soft_version_date,
+        // **G4/G3 批**：`PlayObject.GoldMax` ctor 种子（`PlayObject.cs:1037`）。
+        gold_max: i.gold_max,
         // `PlayObject.ClientTick`（`PlayObject.cs:810`）：进世界初值 0，
         // 只由 `CM_LOGINNOTICEOK(1018)` 写（`PlayObject.cs:1112`）。
         client_tick: 0,
@@ -36445,6 +36462,10 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                     test_server: enter_cfg.test_server,
                                     service_mode: enter_cfg.service_mode,
                                     pay_ment,
+                                    // **G4**：`Abil.Level`（记录 `abil.level`；None ⇒ 0 ⇒ 踢支不触发，登记）。
+                                    abil_level: data
+                                        .and_then(|d| d.abil.as_ref())
+                                        .map_or(0, |a| a.level),
                                     // **G3**：`WorldEngine.PlayObjectCount`（`WorldServer.cs:99`
                                     // = `PlayObjectList.Count`，**含本会话**——oracle 的玩家在
                                     // `UserLogon` 前已进列表；本宿主 `online_set` 已先于本点）。
@@ -36566,6 +36587,15 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                                             "进世界后找不到 actor_id={id} 的实体 ⇒ 装备槽未装载（登记）"
                                                         );
                                     }
+                                    // **G4**：PayMent==1 分支的 GoldMax 覆盖值（None = 分支未进入）。
+                                    let g4_cap = inputs.try_mode_gold_cap;
+                                    // **G4**：`GoldMax = HumanTryModeMaxGold`（oracle `PlayObject.cs:1409`，
+                                    // PayMent==1 分支内无条件改写；此处紧随会话建账之后落地）。
+                                    if let Some(cap) = g4_cap {
+                                        if let Some(sg) = ground_sessions.get_mut(&head.chr_name) {
+                                            sg.gold_max = cap;
+                                        }
+                                    }
                                     ground_sessions.insert(
                                         head.chr_name.clone(),
                                         session_ground_from_login(SessionGroundInputs {
@@ -36578,6 +36608,7 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                             soft_version_date,
                                             actor_id: id,
                                             server_index: enter_cfg.server_index,
+                                            gold_max: enter_cfg.ground.human_max_gold,
                                             magic: readbook::MagicState {
                                                 list: login_magic_list.clone(),
                                                 table: Some(std::sync::Arc::clone(
@@ -36741,6 +36772,7 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                     // 堆布局重算（[`drain_login_tail`]）。
                                     // **G3**：门命中 ⇒ 登记延迟断连（等登录尾段补发完才落地）。
                                     let g3_close = inputs.emergency_close;
+                                    // **G4**：PayMent==1 分支的 GoldMax 覆盖值（None = 分支未进入）。
                                     login_tails.insert(head.chr_name.clone(), inputs);
                                     if g3_close {
                                         login_emergency_close.push(head.chr_name.clone());
@@ -48805,6 +48837,35 @@ mod tests {
         );
     }
 
+    /// **G4 接线保鲜门**：`SessionGround.gold_max` 通道必须 ctor 种子（`:1037`）+ 登录覆盖
+    ///（`:1409`）+ 拾取/交易两个 IncGold 上限消费面接线（脚本商店两处仍读 `cfg`，登记）。
+    /// 红检（实测）：把拾取消费面改回 `cfg.human_max_gold` ⇒ 本用例必红。
+    #[test]
+    fn g4_gold_max_wiring_is_present() {
+        let src = include_str!("lib.rs");
+        assert!(
+            src.contains("gold_max: i.gold_max,"),
+            "ctor 种子（SessionGroundInputs.gold_max）"
+        );
+        assert!(
+            src.contains("let g4_cap = inputs.try_mode_gold_cap;"),
+            "登录点取覆盖值"
+        );
+        assert!(src.contains("sg.gold_max = cap;"), "会话字段改写（:1409）");
+        assert!(
+            src.contains("human_max_gold: sg.gold_max,"),
+            "拾取消费面读会话值"
+        );
+        assert!(
+            src.contains("gold_max: me_sg.gold_max,"),
+            "交易 me 面读会话值"
+        );
+        assert!(
+            src.contains("let other_gold_max ="),
+            "交易 other 面读会话值（借用前取读）"
+        );
+    }
+
     /// **lane654 接线点保鲜门**：生产路径必须
     /// ① 用 [`smframe::EnterWorldInputs::frames_split`]（不是 `frames()`）把登录队列切两段，
     ///    延迟段存的是**输入**（`login_tails.insert(..., inputs)`）；
@@ -55723,6 +55784,7 @@ mod tests {
     /// 测试用的最小 `SessionGround`（攻击/受击用例只需 `wabil` 与 `per_*`）。
     pub(crate) fn test_session_ground(actor_id: i32) -> SessionGround {
         SessionGround {
+            gold_max: 10_000_000,
             a6: A6PlayerState::default(),
             magic: readbook::MagicState::default(),
             home: eat_move::HomeState::default(),
@@ -59985,6 +60047,7 @@ break
             off_line_flag: false,
             kick_off_line_tick: 0,
             guild: guild_cmd::GuildSession::default(),
+            gold_max: 10_000_000,
         };
         let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
@@ -63330,6 +63393,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -63544,6 +63608,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -63740,6 +63805,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -63898,6 +63964,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -64090,6 +64157,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -72298,6 +72366,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -73900,6 +73969,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -75603,6 +75673,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -80495,6 +80566,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -80689,6 +80761,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -80834,6 +80907,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gold_max: 10_000_000,
                 a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
@@ -116608,6 +116682,7 @@ GMEXECUTE f
         let recalc = enter::recalc_for_session(&ability_inputs, rec.data.job);
         let guild_session = guild_cmd::GuildSession::default();
         session_ground_from_login(SessionGroundInputs {
+            gold_max: 10_000_000,
             login_account,
             record: &rec.data,
             recalc: &recalc,
@@ -116646,6 +116721,7 @@ GMEXECUTE f
         let recalc = enter::recalc_for_session(&ability_inputs, data.job);
         let guild_session = guild_cmd::GuildSession::default();
         session_ground_from_login(SessionGroundInputs {
+            gold_max: 10_000_000,
             login_account: "acct",
             record: data,
             recalc: &recalc,

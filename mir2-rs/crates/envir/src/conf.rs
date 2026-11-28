@@ -146,6 +146,19 @@ pub struct GameSvrConf {
     /// 缺省 true）—— G2 的踢人支开关：false ⇒ 追加三条红 + **`return` 截断**（:1341）；
     /// true（缺省部署）⇒ 只发两条、**不截断、不断连**。
     pub can_old_client_logon: bool,
+    /// `[Setup] HumanTryModeMaxGold`（`ServerConf.cs:265`；`GameSvrConf.cs:364/1452`
+    /// 缺省 100000）—— **G4**（`PlayObject.cs:1402-1415`）：PayMent==1 时
+    /// `GoldMax = HumanTryModeMaxGold`（会话金币上限改写）。
+    /// `[Setup] HumanTryModeMaxGold`（`ServerConf.cs:265`；`GameSvrConf.cs:364/1452`
+    /// 缺省 100000）—— **G4**（`PlayObject.cs:1402-1415`）：PayMent==1 时
+    /// `GoldMax = HumanTryModeMaxGold`（会话金币上限改写）。
+    /// `[Setup] HumanTryModeMaxGold`（`ServerConf.cs:265`；`GameSvrConf.cs:364/1452`
+    /// 缺省 100000）—— **G4**（`PlayObject.cs:1402-1415`）：PayMent==1 时
+    /// `GoldMax = HumanTryModeMaxGold`（会话金币上限改写）。
+    pub human_try_mode_max_gold: i32,
+    /// `[Setup] TryModeLevel`（`ServerConf.cs:266`；`GameSvrConf.cs:365/1453` 缺省 7）——
+    /// **G4** 踢人支：`Abil.Level > TryModeLevel` ⇒ 两条硬编码红 + emergency（无 return）。
+    pub try_mode_level: u8,
 }
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientConf.cs:6-24`（17 个 `bool`，声明序即序列化序）。
@@ -339,6 +352,10 @@ impl GameSvrConf {
             // `ServerConf.cs:524/585`：`ReadWriteBool`；缺省都 true（`GameSvrConf.cs:1746/1438`）。
             old_client_show_hi_level: ini.read_bool("Setup", "OldClientShowHiLevel", true),
             can_old_client_logon: ini.read_bool("Setup", "CanOldClientLogon", true),
+            // `ServerConf.cs:265/266`：`ReadWriteInteger/ReadWriteByte`；缺省 100000/7
+            // （`GameSvrConf.cs:1452/1453`）。缺键不算错。
+            human_try_mode_max_gold: ini.read_integer("Setup", "HumanTryModeMaxGold", 100000),
+            try_mode_level: read_u8(ini, "Setup", "TryModeLevel", 7),
         }
     }
 
@@ -655,6 +672,9 @@ GatePort=5000
         // **G2**：两开关缺键 ⇒ 都 true（缺省部署 = 老客户端只提示不踢）。
         assert!(c.old_client_show_hi_level);
         assert!(c.can_old_client_logon);
+        // **G4**：缺键 ⇒ 100000 / 7（`GameSvrConf.cs:1452/1453`）。
+        assert_eq!(c.human_try_mode_max_gold, 100000);
+        assert_eq!(c.try_mode_level, 7);
     }
 
     /// **判据 CF-2（出生点/安全区 11 键，文件值覆盖初值）**。
@@ -677,6 +697,10 @@ SafeZoneSize=3
 SoftVersionDate=20030704
 OldClientShowHiLevel=FALSE
 CanOldClientLogon=FALSE
+HumanTryModeMaxGold=500000
+TryModeLevel=9
+HumanTryModeMaxGold=500000
+TryModeLevel=9
 StartPointSize=5
 [Server]
 TestServerUserLimit=6000
@@ -700,6 +724,12 @@ TestServerUserLimit=6000
         // **G2**：`FALSE` ⇒ false（部署可用两开关关闭提示/放行老客户端登录）。
         assert!(!c.old_client_show_hi_level);
         assert!(!c.can_old_client_logon);
+        // **G4**：部署可调（500000/9）。
+        assert_eq!(c.human_try_mode_max_gold, 500000);
+        assert_eq!(c.try_mode_level, 9);
+        // **G4**：部署可调（500000/9）。
+        assert_eq!(c.human_try_mode_max_gold, 500000);
+        assert_eq!(c.try_mode_level, 9);
         // 空值 ⇒ 初值（`ReadWrite*` 的 `string.IsNullOrEmpty` 分支）。
         let d = GameSvrConf::from_bytes(
             b"[Setup]

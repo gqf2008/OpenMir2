@@ -101,6 +101,8 @@ pub struct WorldFrameInputs<'a> {
     /// **G2**：`MsgColor.Blue` 的色词对（`[Setup] BlueMsgFColor/BlueMsgBColor`，
     /// 缺省 0xFF/0xFC）——槽 9 的 `SM_SYSMESSAGE.Param`。
     pub blue_msg: (u8, u8),
+    /// **G4**：`Abil.Level`（oracle `PlayObject.Abil.Level`；记录 `abil.level` 同源）。
+    pub abil_level: u8,
 }
 
 /// `PlayObject.RecalcAbilitys()`（`BaseObject.Abil.cs:15` + `PlayObject.cs:2008`）的一次输入。
@@ -1031,6 +1033,36 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
         }
         _ => false,
     };
+    // **G4（体验模式块，`PlayObject.cs:1402-1415`）**：PayMent==1（TestServer/ServiceMode
+    // 强制 3 ⇒ **现部署死支**——配置面可达即 faithful，opc-66 指示照钉）。!TryPlayMode 恒真
+    // （`Initialize()` 复位 :909）。`GoldMax = HumanTryModeMaxGold` 无条件入分支（会话侧
+    // 消费 `try_mode_gold_cap`）；`Abil.Level > TryModeLevel` ⇒ 两条**硬编码**红（不走
+    // MessageSettings）+ emergency（**无 return**，同 G3 走完机制）。
+    let try_mode_cap = match wx.conf {
+        Some(conf) if !version_truncated && pay_ment == 1 => {
+            base.try_mode_gold_cap = Some(conf.human_try_mode_max_gold);
+            if let Some(strings) = wx.strings {
+                base.login_sys_msgs.you_now_is_try_play_mode =
+                    Some(gbk(strings.you_now_is_try_play_mode()));
+            }
+            if i32::from(wx.abil_level) > i32::from(conf.try_mode_level) {
+                base.try_mode_kick = true;
+                // 两条**硬编码**（oracle 源码内联，不依赖 String.conf）⇒ 无 if let 包装
+                //（F1 同口径：置位/正文可用性与 String.conf 装载解耦）。
+                base.login_sys_msgs.try_mode_level_notice = Some(gbk(&format!(
+                    "测试状态可以使用到第 {}",
+                    conf.try_mode_level
+                )));
+                base.login_sys_msgs.try_mode_disconnect = Some(gbk(
+                    "链接中断，请到以下地址获得收费相关信息。(https://www.mir2.com)",
+                ));
+                base.emergency_close = true;
+            }
+            base.try_mode_gold_cap
+        }
+        _ => None,
+    };
+    let _ = try_mode_cap;
     base.login_sys_msgs.green = wx.green_msg;
     // **G2**：蓝字色词（`MsgColor.Blue` ⇒ 槽 9 的 `SM_SYSMESSAGE.Param`）。
     base.login_sys_msgs.blue = wx.blue_msg;
@@ -3387,6 +3419,7 @@ mod tests {
             permission: 0,
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
+            abil_level: 1,
         };
         let _warns = apply(&mut base, &wx);
         assert!(base.emergency_close, "门命中 ⇒ BoEmergencyClose");
@@ -3451,6 +3484,7 @@ mod tests {
             permission: 0,
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
+            abil_level: 1,
         };
         let _ = apply(&mut base, &wx);
         assert!(!base.emergency_close, "恰等界不触发");
@@ -3497,6 +3531,7 @@ mod tests {
             permission: 2,
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
+            abil_level: 1,
         };
         let _ = apply(&mut base, &wx);
         assert!(!base.emergency_close, "权限 ≥ 2 豁免");
@@ -3533,6 +3568,7 @@ mod tests {
             permission: 0,
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
+            abil_level: 1,
         };
         let warns = apply(&mut base, &wx);
         assert!(!base.emergency_close, "conf 缺失 ⇒ 门不置位");
@@ -3579,6 +3615,7 @@ mod tests {
             permission: 0,
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
+            abil_level: 1,
         };
         let _ = apply(&mut base, &wx);
         assert!(base.emergency_close, "谓词命中 ⇒ 踢人不依赖 String.conf");
@@ -3599,6 +3636,8 @@ mod tests {
         abil: &'a Ability,
         bonus: &'a NakedAbility,
         soft_version_date: i32,
+        pay_ment: i32,
+        abil_level: u8,
     ) -> WorldFrameInputs<'a> {
         let a = AbilityInputs {
             catalog,
@@ -3644,8 +3683,9 @@ mod tests {
             green_msg: (0xDB, 0xFF),
             test_server: false,
             service_mode: false,
-            pay_ment: 3,
+            pay_ment,
             play_object_count: 0,
+            abil_level,
             permission: 0,
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
@@ -3667,7 +3707,7 @@ mod tests {
             actor_id: 9,
             ..EnterWorldInputs::default()
         };
-        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 20020521);
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 20020521, 3, 1);
         let _ = apply(&mut base, &wx);
         assert_eq!(base.version_gate, VersionGateHit::SoftVersionKick);
         assert!(base.emergency_close, "G1 命中 ⇒ BoEmergencyClose");
@@ -3735,7 +3775,7 @@ mod tests {
             actor_id: 9,
             ..EnterWorldInputs::default()
         };
-        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522);
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522, 3, 1);
         let _ = apply(&mut base, &wx);
         assert_eq!(base.version_gate, VersionGateHit::None);
         assert!(!base.emergency_close);
@@ -3768,7 +3808,7 @@ mod tests {
         let abil = Ability::default();
         let bonus = rec_naked();
         let mut base = EnterWorldInputs::default();
-        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 20020522);
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 20020522, 3, 1);
         let _ = apply(&mut base, &wx);
         assert_eq!(base.version_gate, VersionGateHit::None);
         assert!(!base.emergency_close);
@@ -3792,7 +3832,7 @@ mod tests {
             actor_id: 11,
             ..EnterWorldInputs::default()
         };
-        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0);
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0, 3, 1);
         let _ = apply(&mut base, &wx);
         assert_eq!(base.version_gate, VersionGateHit::OldClientPass);
         assert!(!base.emergency_close, "通过支不置 BoEmergencyClose");
@@ -3836,7 +3876,7 @@ mod tests {
             actor_id: 11,
             ..EnterWorldInputs::default()
         };
-        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0);
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0, 3, 1);
         let _ = apply(&mut base, &wx);
         assert_eq!(base.version_gate, VersionGateHit::OldClientKick);
         assert!(base.emergency_close, "踢人支 ⇒ BoEmergencyClose");
@@ -3874,7 +3914,7 @@ mod tests {
         let abil = Ability::default();
         let bonus = rec_naked();
         let mut base = EnterWorldInputs::default();
-        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0);
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0, 3, 1);
         let _ = apply(&mut base, &wx);
         assert_eq!(base.version_gate, VersionGateHit::None);
         assert!(!base.emergency_close);
@@ -3893,11 +3933,125 @@ mod tests {
         let abil = Ability::default();
         let bonus = rec_naked();
         let mut base = EnterWorldInputs::default();
-        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120_020_522);
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120_020_522, 3, 1);
         let _ = apply(&mut base, &wx);
         assert_eq!(base.version_gate, VersionGateHit::None);
         assert!(!base.emergency_close);
         assert_eq!(base.login_sys_msgs.text(9), None);
         assert_eq!(base.login_sys_msgs.text(13), None);
+    }
+
+    // ===== G4 体验模式块（`PlayObject.cs:1402-1415`；卡 `openmir2-userlogon-login-gates`）=====
+
+    /// **G4 通过/上限牙**：`pay_ment=1`（门槛：TestServer/ServiceMode 均关）⇒ 蓝…
+    /// 更正：槽 14 = YouNowIsTryPlayMode **红字** + `GoldMax` 覆盖 Some(100000)；等级 1 ≤ 7
+    /// ⇒ 无踢支、不截断（52 在产出里）。红检：删 `try_mode_gold_cap` 置位 ⇒ 本牙必红。
+    #[test]
+    fn g4_pay_ment_one_caps_gold_and_notices() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs::default();
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522, 1, 1);
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.try_mode_gold_cap, Some(100000));
+        let t14 = gbk(crate::strings::DEFAULT_YOU_NOW_IS_TRY_PLAY_MODE);
+        assert_eq!(base.login_sys_msgs.text(14), Some(t14.as_slice()));
+        let e14 = crate::smframe::sm_sysmessage(0, 0xFF, 0x38, &t14);
+        assert!(
+            base.frames().iter().any(|f| f.as_slice() == e14.as_slice()),
+            "槽 14 帧在产出里（入队门证人）"
+        );
+        assert_eq!(base.login_sys_msgs.text(15), None);
+        assert_eq!(base.login_sys_msgs.text(16), None);
+        assert!(!base.emergency_close);
+        assert!(
+            idents(&base.frames()).contains(&52),
+            "无 return ⇒ 52 在产出里"
+        );
+        assert_eq!(
+            base.login_sys_msgs.text(3),
+            None,
+            "PayMent≠3 ⇒ free_play 不填"
+        );
+    }
+
+    /// **G4 踢人支牙**：`Abil.Level 8 > TryModeLevel 7` ⇒ 两条**硬编码**红（字节精确）+
+    /// emergency；**无 return** ⇒ 52 仍在产出里（与 G1/G2 的截断相反）。
+    /// 红检：删 emergency 置位 / `>` 变异 `>=` ⇒ 本牙（或边界牙）必红。
+    #[test]
+    fn g4_kick_over_level_no_return() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs::default();
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522, 1, 8);
+        let _ = apply(&mut base, &wx);
+        assert!(base.try_mode_kick);
+        assert!(base.emergency_close);
+        let t15 = gbk("测试状态可以使用到第 7");
+        let t16 = gbk("链接中断，请到以下地址获得收费相关信息。(https://www.mir2.com)");
+        assert_eq!(base.login_sys_msgs.text(15), Some(t15.as_slice()));
+        assert_eq!(base.login_sys_msgs.text(16), Some(t16.as_slice()));
+        assert!(
+            idents(&base.frames()).contains(&52),
+            "无 return ⇒ 52 仍在产出里"
+        );
+    }
+
+    /// **G4 边界牙**：`Abil.Level == TryModeLevel(7)` ⇒ 严格 `>` **不**踢
+    /// （把 `>` 变异成 `>=` ⇒ 本牙必红）。
+    #[test]
+    fn g4_boundary_level_equal_no_kick() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs::default();
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522, 1, 7);
+        let _ = apply(&mut base, &wx);
+        assert!(!base.try_mode_kick);
+        assert!(!base.emergency_close);
+        assert_eq!(base.login_sys_msgs.text(15), None);
+        assert_eq!(base.login_sys_msgs.text(16), None);
+        assert_eq!(
+            base.try_mode_gold_cap,
+            Some(100000),
+            "上限改写与踢支无关（分支内无条件）"
+        );
+    }
+
+    /// **G4 死支牙（opc-66 ①）**：现部署 `TestServer=TRUE` ⇒ PayMent 强制 3 ⇒ 分支不进入
+    /// （pay_ment 输入即便为 1 也被覆盖）。配置面可达即 faithful——本牙钉死部署死支形态。
+    /// 红检：`pay_ment == 1` 变异 `>= 1` ⇒ 本牙必红。
+    #[test]
+    fn g4_dead_in_testserver_deployment() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs::default();
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522, 1, 8);
+        // test_server=true ⇒ PayMent 覆盖 3（apply 内同源强制）。
+        let wx = WorldFrameInputs {
+            test_server: true,
+            ..wx
+        };
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.try_mode_gold_cap, None, "部署死支 ⇒ 分支不进入");
+        assert_eq!(base.login_sys_msgs.text(14), None);
+        assert!(!base.try_mode_kick);
+        assert!(!base.emergency_close);
+        assert_eq!(
+            base.login_sys_msgs.text(3),
+            Some(gbk(crate::strings::DEFAULT_NOW_IS_FREE_PLAY_MODE).as_slice()),
+            "覆盖后 PayMent=3 ⇒ free_play 照发"
+        );
     }
 }

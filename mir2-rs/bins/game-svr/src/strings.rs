@@ -119,6 +119,10 @@ pub const DEFAULT_CLIENT_SOFT_VERSION_TOO_OLD: &str =
 /// **G2**：`[String] DownLoadAndUseNewClient`（红字；缺键回落 `MessageSettings.cs:35`）。
 pub const DEFAULT_DOWNLOAD_AND_USE_NEW_CLIENT: &str =
     "为了更好的进行游戏，请下载最新的客户端软件!!!";
+/// **G4**：`[String] YouNowIsTryPlayMode`（体验模式第 1 条红字；缺键回落
+/// `MessageSettings.cs:37`）。注意：G4 踢支两条是**硬编码**不走 MessageSettings。
+pub const DEFAULT_YOU_NOW_IS_TRY_PLAY_MODE: &str =
+    "你现在处于测试中，你可以在七级以前使用，但是会限制你的一些功能.";
 
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
@@ -246,6 +250,9 @@ pub struct StringConf {
     // （`StringConf.cs:49/50` 读键；踢支三条复用 G1 已备键）。
     client_soft_version_too_old: Option<String>,
     download_and_use_new_client: Option<String>,
+    // **G4（`PlayObject.cs:1407`）**：体验模式提示（`StringConf.cs:52` 读键；
+    // 踢支两条是 oracle 源码硬编码，不走本表）。
+    you_now_is_try_play_mode: Option<String>,
     // `[String]` 喊话三键（`StringConf.cs:257-259`）。
     you_need_level_msg: Option<String>,
     this_map_disable_send_cycy_msg: Option<String>,
@@ -687,6 +694,14 @@ impl StringConf {
             .as_deref()
             .unwrap_or(DEFAULT_DOWNLOAD_AND_USE_NEW_CLIENT)
     }
+
+    /// `[String] YouNowIsTryPlayMode`（G4 第 1 条；缺键回落 `MessageSettings.cs:37`）。
+    #[must_use]
+    pub fn you_now_is_try_play_mode(&self) -> &str {
+        self.you_now_is_try_play_mode
+            .as_deref()
+            .unwrap_or(DEFAULT_YOU_NOW_IS_TRY_PLAY_MODE)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -826,6 +841,7 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "DOWNLOADNEWCLIENTSOFT") => &mut conf.download_new_client_soft,
             (Section::String, "CLIENTSOFTVERSIONTOOOLD") => &mut conf.client_soft_version_too_old,
             (Section::String, "DOWNLOADANDUSENEWCLIENT") => &mut conf.download_and_use_new_client,
+            (Section::String, "YOUNOWISTRYPLAYMODE") => &mut conf.you_now_is_try_play_mode,
             (Section::String, "YOUNEEDLEVELSENDMSG") => &mut conf.you_need_level_msg,
             (Section::String, "THISMAPDISABLESENDCYCYMSG") => {
                 &mut conf.this_map_disable_send_cycy_msg
