@@ -1407,6 +1407,10 @@ pub struct EnterWorldInputs {
     /// **G4**：踢人子支（`Abil.Level > TryModeLevel`）⇒ 槽 15/16 + emergency
     /// （oracle **无 return**，登录序走完——与 G3 同机制）。
     pub try_mode_kick: bool,
+    /// **G5**：禁登名单命中支（IP/账号/人物三选一，`PlayObject.Base.cs:3390-3402`）。
+    /// oracle 命中 ⇒ 一条红（槽 17/18/19）+ emergency + `return` 截断（`:1435`）；
+    /// **生产恒 `None`**（`GetDeny*` 比较体被注释 ⇒ 恒不命中——BUG-REPLICA 死结构）。
+    pub deny_logon_hit: Option<crate::enter::DenyLogonHit>,
     /// **`openmir2-login-charstatus-657`**：`RecalcAbilitys()` 收尾两条 `RM_CHARSTATUSCHANGED`
     /// 的载荷 `(CharStatus, PlayObject.HitSpeed)`。
     ///
@@ -1473,6 +1477,13 @@ pub struct LoginSysMsgs {
     pub try_mode_level_notice: Option<Vec<u8>>,
     /// **G4** 槽 16：踢支第 2 条——收费地址提示（oracle **硬编码**）。
     pub try_mode_disconnect: Option<Vec<u8>>,
+    /// **G5** 槽 17：`MessageSettings.YourIPaddrDenyLogon`（红；命中支 oracle 恒不可达
+    /// ——`GetDeny*` 比较体全部被注释，见 [`game_svr::enter::deny_logon`]）。
+    pub your_ip_addr_deny_logon: Option<Vec<u8>>,
+    /// **G5** 槽 18：`MessageSettings.YourAccountDenyLogon`（红）。
+    pub your_account_deny_logon: Option<Vec<u8>>,
+    /// **G5** 槽 19：`MessageSettings.YourChrNameDenyLogon`（红）。
+    pub your_chr_name_deny_logon: Option<Vec<u8>>,
     /// `MsgColor.Blue` 的 `(BlueMsgFColor, BlueMsgBColor)`（缺省 0xFF/0xFC，
     /// `GameSvrConf.cs:1538-1539`）：槽 9 的 `SM_SYSMESSAGE.Param`。
     pub blue: (u8, u8),
@@ -1503,6 +1514,10 @@ impl LoginSysMsgs {
             14 => self.you_now_is_try_play_mode.as_deref(),
             15 => self.try_mode_level_notice.as_deref(),
             16 => self.try_mode_disconnect.as_deref(),
+            // **G5**：槽 17/18/19 全红（命中支 oracle 恒不可达）。
+            17 => self.your_ip_addr_deny_logon.as_deref(),
+            18 => self.your_account_deny_logon.as_deref(),
+            19 => self.your_chr_name_deny_logon.as_deref(),
             _ => None,
         }
     }
@@ -1515,7 +1530,7 @@ impl LoginSysMsgs {
         match slot {
             // G3 槽 4/5、G1 槽 6/7/8、G2 踢支 11/12/13 与 10 = 红；G2 槽 9 = **蓝**。
             9 => self.blue,
-            4..=8 | 10..=16 => self.red,
+            4..=8 | 10..=19 => self.red,
             _ => self.green,
         }
     }
@@ -1825,6 +1840,13 @@ impl EnterWorldInputs {
         //    `NowIsFreePlayMode`（`PlayObject.cs:1417-1420`，位置在 `RefShowName` 之后）。
         if self.pay_ment_three {
             queue.enqueue(LoginQueued::SysMsg(3), prio_sysmsg);
+        }
+        // ⑧ **G5 禁登名单**（`PlayObject.cs:1434` → `Base.cs:3387-3405`）：命中 ⇒ 命中支
+        //     **一条**红（IP/账号/人物三选一，else-if 互斥）+ emergency + `return` 截断
+        //     （:1435——其后的 @Login 脚本/FixedHideMode 等不再执行）。oracle 命中恒不可达
+        //     ⇒ 生产恒不触发（BUG-REPLICA：死结构照钉）。位置 = free_play 之后（:1434 > :1417）。
+        if let Some(hit) = self.deny_logon_hit {
+            queue.enqueue(LoginQueued::SysMsg(17 + hit as u8), prio_sysmsg);
         }
 
         // ⑦ 其他 actor 的出现/死亡槽（`SearchViewRange`，`PlayObject.cs:3220-3240`）：
@@ -2921,6 +2943,7 @@ mod tests {
             version_gate: VersionGateHit::None,
             try_mode_gold_cap: None,
             try_mode_kick: false,
+            deny_logon_hit: None,
         }
     }
 
@@ -3114,6 +3137,7 @@ mod tests {
             version_gate: VersionGateHit::None,
             try_mode_gold_cap: None,
             try_mode_kick: false,
+            deny_logon_hit: None,
         };
         let got: Vec<u16> = inputs
             .frames()
@@ -3178,6 +3202,7 @@ mod tests {
             version_gate: VersionGateHit::None,
             try_mode_gold_cap: None,
             try_mode_kick: false,
+            deny_logon_hit: None,
         }
     }
 

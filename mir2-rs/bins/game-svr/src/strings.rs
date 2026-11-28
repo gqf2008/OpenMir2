@@ -123,6 +123,10 @@ pub const DEFAULT_DOWNLOAD_AND_USE_NEW_CLIENT: &str =
 /// `MessageSettings.cs:37`）。注意：G4 踢支两条是**硬编码**不走 MessageSettings。
 pub const DEFAULT_YOU_NOW_IS_TRY_PLAY_MODE: &str =
     "你现在处于测试中，你可以在七级以前使用，但是会限制你的一些功能.";
+/// **G5**：禁登名单三键（`StringConf.cs:226-228` 读键；缺键回落 `MessageSettings.cs:218-220`）。
+pub const DEFAULT_YOUR_IPADDR_DENY_LOGON: &str = "你当前登录的IP地址已被禁止登录了!!!";
+pub const DEFAULT_YOUR_ACCOUNT_DENY_LOGON: &str = "你当前登录的帐号已被禁止登录了!!!";
+pub const DEFAULT_YOUR_CHR_NAME_DENY_LOGON: &str = "你当前登录的人物已被禁止登录了!!!";
 
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
@@ -253,6 +257,11 @@ pub struct StringConf {
     // **G4（`PlayObject.cs:1407`）**：体验模式提示（`StringConf.cs:52` 读键；
     // 踢支两条是 oracle 源码硬编码，不走本表）。
     you_now_is_try_play_mode: Option<String>,
+    // **G5（`PlayObject.Base.cs:3387-3405`）**：禁登名单三条红字
+    // （`StringConf.cs:226-228` 读键；命中支在 oracle 恒不可达——见 enter::deny_logon）。
+    your_ip_addr_deny_logon: Option<String>,
+    your_account_deny_logon: Option<String>,
+    your_chr_name_deny_logon: Option<String>,
     // `[String]` 喊话三键（`StringConf.cs:257-259`）。
     you_need_level_msg: Option<String>,
     this_map_disable_send_cycy_msg: Option<String>,
@@ -702,6 +711,30 @@ impl StringConf {
             .as_deref()
             .unwrap_or(DEFAULT_YOU_NOW_IS_TRY_PLAY_MODE)
     }
+
+    /// `[String] YourIPaddrDenyLogon`（G5 第 1 条；缺键回落 `MessageSettings.cs:218`）。
+    #[must_use]
+    pub fn your_ip_addr_deny_logon(&self) -> &str {
+        self.your_ip_addr_deny_logon
+            .as_deref()
+            .unwrap_or(DEFAULT_YOUR_IPADDR_DENY_LOGON)
+    }
+
+    /// `[String] YourAccountDenyLogon`（G5 第 2 条；缺键回落 `MessageSettings.cs:219`）。
+    #[must_use]
+    pub fn your_account_deny_logon(&self) -> &str {
+        self.your_account_deny_logon
+            .as_deref()
+            .unwrap_or(DEFAULT_YOUR_ACCOUNT_DENY_LOGON)
+    }
+
+    /// `[String] YourChrNameDenyLogon`（G5 第 3 条；缺键回落 `MessageSettings.cs:220`）。
+    #[must_use]
+    pub fn your_chr_name_deny_logon(&self) -> &str {
+        self.your_chr_name_deny_logon
+            .as_deref()
+            .unwrap_or(DEFAULT_YOUR_CHR_NAME_DENY_LOGON)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -842,6 +875,9 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "CLIENTSOFTVERSIONTOOOLD") => &mut conf.client_soft_version_too_old,
             (Section::String, "DOWNLOADANDUSENEWCLIENT") => &mut conf.download_and_use_new_client,
             (Section::String, "YOUNOWISTRYPLAYMODE") => &mut conf.you_now_is_try_play_mode,
+            (Section::String, "YOURIPADDRDENYLOGON") => &mut conf.your_ip_addr_deny_logon,
+            (Section::String, "YOURACCOUNTDENYLOGON") => &mut conf.your_account_deny_logon,
+            (Section::String, "YOURCHRNAMEDENYLOGON") => &mut conf.your_chr_name_deny_logon,
             (Section::String, "YOUNEEDLEVELSENDMSG") => &mut conf.you_need_level_msg,
             (Section::String, "THISMAPDISABLESENDCYCYMSG") => {
                 &mut conf.this_map_disable_send_cycy_msg

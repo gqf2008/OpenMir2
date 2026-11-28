@@ -36466,6 +36466,14 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                     abil_level: data
                                         .and_then(|d| d.abil.as_ref())
                                         .map_or(0, |a| a.level),
+                                    // **G5**: computed from the (always-empty) deny lists;
+                                    // login IP unmodeled => "" (registered).
+                                    deny_logon_hit: enter::check_deny_logon(
+                                        &enter::load_deny_logon_lists("Envir"),
+                                        "",
+                                        &account,
+                                        &head.chr_name,
+                                    ),
                                     // **G3**：`WorldEngine.PlayObjectCount`（`WorldServer.cs:99`
                                     // = `PlayObjectList.Count`，**含本会话**——oracle 的玩家在
                                     // `UserLogon` 前已进列表；本宿主 `online_set` 已先于本点）。

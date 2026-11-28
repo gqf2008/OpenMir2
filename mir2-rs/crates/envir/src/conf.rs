@@ -149,12 +149,6 @@ pub struct GameSvrConf {
     /// `[Setup] HumanTryModeMaxGold`（`ServerConf.cs:265`；`GameSvrConf.cs:364/1452`
     /// 缺省 100000）—— **G4**（`PlayObject.cs:1402-1415`）：PayMent==1 时
     /// `GoldMax = HumanTryModeMaxGold`（会话金币上限改写）。
-    /// `[Setup] HumanTryModeMaxGold`（`ServerConf.cs:265`；`GameSvrConf.cs:364/1452`
-    /// 缺省 100000）—— **G4**（`PlayObject.cs:1402-1415`）：PayMent==1 时
-    /// `GoldMax = HumanTryModeMaxGold`（会话金币上限改写）。
-    /// `[Setup] HumanTryModeMaxGold`（`ServerConf.cs:265`；`GameSvrConf.cs:364/1452`
-    /// 缺省 100000）—— **G4**（`PlayObject.cs:1402-1415`）：PayMent==1 时
-    /// `GoldMax = HumanTryModeMaxGold`（会话金币上限改写）。
     pub human_try_mode_max_gold: i32,
     /// `[Setup] TryModeLevel`（`ServerConf.cs:266`；`GameSvrConf.cs:365/1453` 缺省 7）——
     /// **G4** 踢人支：`Abil.Level > TryModeLevel` ⇒ 两条硬编码红 + emergency（无 return）。

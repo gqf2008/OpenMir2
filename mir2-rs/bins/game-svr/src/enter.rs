@@ -103,6 +103,9 @@ pub struct WorldFrameInputs<'a> {
     pub blue_msg: (u8, u8),
     /// **G4**：`Abil.Level`（oracle `PlayObject.Abil.Level`；记录 `abil.level` 同源）。
     pub abil_level: u8,
+    /// **G5**：禁登名单命中（`check_deny_logon` 的结果；生产恒 `None`——
+    /// oracle 比较体被注释 ⇒ 恒不命中，BUG-REPLICA 死结构）。
+    pub deny_logon_hit: Option<DenyLogonHit>,
 }
 
 /// `PlayObject.RecalcAbilitys()`（`BaseObject.Abil.cs:15` + `PlayObject.cs:2008`）的一次输入。
@@ -901,6 +904,60 @@ fn send_my_magic(a: &AbilityInputs<'_>) -> Option<(u16, Vec<u8>)> {
 ///
 /// 返回本步产生的 WRN 文案（调用方逐条 `glog!`，不静默）。
 #[must_use]
+/// **G5 禁登名单命中形态**（`PlayObject.Base.cs:3390-3402` 的 if/else-if 互斥三支）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenyLogonHit {
+    IpAddr,
+    Account,
+    ChrName,
+}
+
+/// **G5 三张禁登名单**（oracle `M2Share.g_DenyIPAddrList/g_DenyAccountList/g_DenyChrNameList`）。
+#[derive(Debug, Default, Clone)]
+pub struct DenyLogonLists {
+    pub ip_addr: Vec<String>,
+    pub account: Vec<String>,
+    pub chr_name: Vec<String>,
+}
+
+/// **G5 禁登判定**（oracle `PlayObject.Base.cs:3387-3405` 的 `CheckDenyLogon` +
+/// `M2Share.GetDeny*`；BUG-REPLICA **死结构 1:1**）。
+///
+/// oracle 现状：三个 `GetDeny*` 的**命中比较体全部被注释**（`M2Share.cs:1570-1577/
+/// 1654-1661/1713-1719` —— 扫描名单但比较不存在 ⇒ `result` 恒 `false`）；三张名单的
+/// **装载体**同样被注释（`LoadDenyIPAddrList/LoadDenyAccountList/LoadDenyChrNameList`
+/// 不读文件 ⇒ 名单恒空）。⇒ oracle 生产里 `CheckDenyLogon()` **恒 false**，G5 命中支
+/// 不可达。本函数 1:1 复刻：扫描发生（名单可以为非空——测试注入用）、比较被注释 ⇒
+/// **恒 `None`**；装载函数 `load_deny_logon_lists` 同样**不读任何文件**。
+///
+/// 红检（实测）：把任一比较体接回（真实字符串相等）⇒ 反向牙必红（BUG-REPLICA）。
+pub fn check_deny_logon(
+    lists: &DenyLogonLists,
+    ip_addr: &str,
+    account: &str,
+    chr_name: &str,
+) -> Option<DenyLogonHit> {
+    // oracle `M2Share.GetDenyIPAddrList`：`for` 扫描 + 比较体注释 ⇒ 恒 false。
+    for entry in &lists.ip_addr {
+        let _ = (entry, ip_addr);
+    }
+    // oracle `M2Share.GetDenyAccountList`：同上。
+    for entry in &lists.account {
+        let _ = (entry, account);
+    }
+    // oracle `M2Share.GetDenyChrNameList`：同上。
+    for entry in &lists.chr_name {
+        let _ = (entry, chr_name);
+    }
+    None
+}
+
+/// **G5 装载**（oracle `LoadDenyIPAddrList/LoadDenyAccountList/LoadDenyChrNameList`：
+/// 文件读取体全部被注释 ⇒ 恒返回 false、名单恒空）。1:1：**不读任何文件**。
+pub fn load_deny_logon_lists(_envir_dir: &str) -> DenyLogonLists {
+    DenyLogonLists::default()
+}
+
 pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<String> {
     let mut warns = Vec::new();
 
@@ -1038,7 +1095,7 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
     // （`Initialize()` 复位 :909）。`GoldMax = HumanTryModeMaxGold` 无条件入分支（会话侧
     // 消费 `try_mode_gold_cap`）；`Abil.Level > TryModeLevel` ⇒ 两条**硬编码**红（不走
     // MessageSettings）+ emergency（**无 return**，同 G3 走完机制）。
-    let try_mode_cap = match wx.conf {
+    match wx.conf {
         Some(conf) if !version_truncated && pay_ment == 1 => {
             base.try_mode_gold_cap = Some(conf.human_try_mode_max_gold);
             if let Some(strings) = wx.strings {
@@ -1058,11 +1115,33 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
                 ));
                 base.emergency_close = true;
             }
-            base.try_mode_gold_cap
         }
-        _ => None,
-    };
-    let _ = try_mode_cap;
+        _ => {}
+    }
+    // **G5 (deny lists): hit => one red (slot 17/18/19) + emergency + return-cut.
+    // Production is always None (oracle compare bodies commented out).
+    if !version_truncated {
+        if let Some(hit) = wx.deny_logon_hit {
+            base.deny_logon_hit = Some(hit);
+            base.emergency_close = true;
+            if let Some(strings) = wx.strings {
+                match hit {
+                    DenyLogonHit::IpAddr => {
+                        base.login_sys_msgs.your_ip_addr_deny_logon =
+                            Some(gbk(strings.your_ip_addr_deny_logon()));
+                    }
+                    DenyLogonHit::Account => {
+                        base.login_sys_msgs.your_account_deny_logon =
+                            Some(gbk(strings.your_account_deny_logon()));
+                    }
+                    DenyLogonHit::ChrName => {
+                        base.login_sys_msgs.your_chr_name_deny_logon =
+                            Some(gbk(strings.your_chr_name_deny_logon()));
+                    }
+                }
+            }
+        }
+    }
     base.login_sys_msgs.green = wx.green_msg;
     // **G2**：蓝字色词（`MsgColor.Blue` ⇒ 槽 9 的 `SM_SYSMESSAGE.Param`）。
     base.login_sys_msgs.blue = wx.blue_msg;
@@ -3420,6 +3499,7 @@ mod tests {
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
             abil_level: 1,
+            deny_logon_hit: None,
         };
         let _warns = apply(&mut base, &wx);
         assert!(base.emergency_close, "门命中 ⇒ BoEmergencyClose");
@@ -3485,6 +3565,7 @@ mod tests {
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
             abil_level: 1,
+            deny_logon_hit: None,
         };
         let _ = apply(&mut base, &wx);
         assert!(!base.emergency_close, "恰等界不触发");
@@ -3532,6 +3613,7 @@ mod tests {
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
             abil_level: 1,
+            deny_logon_hit: None,
         };
         let _ = apply(&mut base, &wx);
         assert!(!base.emergency_close, "权限 ≥ 2 豁免");
@@ -3569,6 +3651,7 @@ mod tests {
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
             abil_level: 1,
+            deny_logon_hit: None,
         };
         let warns = apply(&mut base, &wx);
         assert!(!base.emergency_close, "conf 缺失 ⇒ 门不置位");
@@ -3616,6 +3699,7 @@ mod tests {
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
             abil_level: 1,
+            deny_logon_hit: None,
         };
         let _ = apply(&mut base, &wx);
         assert!(base.emergency_close, "谓词命中 ⇒ 踢人不依赖 String.conf");
@@ -3686,6 +3770,7 @@ mod tests {
             pay_ment,
             play_object_count: 0,
             abil_level,
+            deny_logon_hit: None,
             permission: 0,
             red_msg: (0xFF, 0x38),
             blue_msg: (0xFF, 0xFC),
@@ -4053,5 +4138,137 @@ mod tests {
             Some(gbk(crate::strings::DEFAULT_NOW_IS_FREE_PLAY_MODE).as_slice()),
             "覆盖后 PayMent=3 ⇒ free_play 照发"
         );
+    }
+
+    // ===== G5 deny-logon lists (Base.cs:3387-3405) =====
+
+    /// **G5 dead-structure tooth (BUG-REPLICA reverse)**: populated lists + exact
+
+    /// matches => check_deny_logon still None (oracle compare bodies commented out).
+
+    #[test]
+
+    fn g5_deny_hit_never_fires_even_with_populated_lists() {
+        let lists = DenyLogonLists {
+            ip_addr: vec!["127.0.0.1".into(), "10.0.0.9".into()],
+
+            account: vec!["hero".into()],
+
+            chr_name: vec!["hero".into()],
+        };
+
+        assert_eq!(
+            check_deny_logon(&lists, "127.0.0.1", "hero", "hero"),
+            None,
+            "compare bodies commented => always None (BUG-REPLICA)"
+        );
+    }
+
+    /// **G5 load tooth**: loader reads NO files (oracle load bodies commented out).
+
+    #[test]
+
+    fn g5_load_reads_no_files() {
+        let lists = load_deny_logon_lists("Envir");
+
+        assert!(lists.ip_addr.is_empty());
+
+        assert!(lists.account.is_empty());
+
+        assert!(lists.chr_name.is_empty());
+    }
+
+    /// **G5 hit-wiring tooth**: wx.deny_logon_hit = Some(Account) (test-injected; production
+
+    /// always None) => slot 18 one red + emergency + frames still complete (G5 at :1434,
+
+    /// all login frames already enqueued => 52 present) + slots 17/19 None (else-if).
+
+    #[test]
+
+    fn g5_hit_account_wires_one_red_and_full_frames() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+
+        let strings = crate::strings::StringConf::defaults();
+
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let abil = Ability::default();
+
+        let bonus = rec_naked();
+
+        let mut base = EnterWorldInputs::default();
+
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522, 3, 1);
+
+        let wx = WorldFrameInputs {
+            deny_logon_hit: Some(DenyLogonHit::Account),
+            ..wx
+        };
+
+        let _ = apply(&mut base, &wx);
+
+        assert_eq!(base.deny_logon_hit, Some(DenyLogonHit::Account));
+
+        assert!(base.emergency_close, "hit => BoEmergencyClose");
+
+        let t18 = gbk(crate::strings::DEFAULT_YOUR_ACCOUNT_DENY_LOGON);
+
+        assert_eq!(base.login_sys_msgs.text(18), Some(t18.as_slice()));
+
+        assert_eq!(base.login_sys_msgs.text(17), None);
+
+        assert_eq!(base.login_sys_msgs.text(19), None);
+
+        let after = base.frames();
+
+        let e18 = crate::smframe::sm_sysmessage(0, 0xFF, 0x38, &t18);
+
+        assert!(after.iter().any(|f| f.as_slice() == e18.as_slice()));
+
+        assert!(
+            idents(&after).contains(&52),
+            ":1434 => all login frames already enqueued"
+        );
+    }
+
+    /// **G5 production-silent tooth**: lists always empty => check None => no 17/18/19,
+
+    /// no emergency, no truncation; 52 present (counterpart of the hit tooth).
+
+    #[test]
+
+    fn g5_production_lists_keep_login_silent() {
+        let lists = load_deny_logon_lists("Envir");
+
+        assert_eq!(check_deny_logon(&lists, "1.2.3.4", "acc", "role"), None);
+
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+
+        let strings = crate::strings::StringConf::defaults();
+
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let abil = Ability::default();
+
+        let bonus = rec_naked();
+
+        let mut base = EnterWorldInputs::default();
+
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522, 3, 1);
+
+        let _ = apply(&mut base, &wx);
+
+        assert_eq!(base.deny_logon_hit, None);
+
+        assert!(!base.emergency_close);
+
+        assert_eq!(base.login_sys_msgs.text(17), None);
+
+        assert_eq!(base.login_sys_msgs.text(18), None);
+
+        assert_eq!(base.login_sys_msgs.text(19), None);
+
+        assert!(idents(&base.frames()).contains(&52));
     }
 }
