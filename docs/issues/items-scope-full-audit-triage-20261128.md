@@ -186,3 +186,13 @@ golden Cmd(5,622,0,7,36679)）而仅旧例的 ergum 单例测试保持绿（判�
 （删键；657 已由 m3 批点亮、item_list ③-B 归另卡）——**物品域 scope 键清零（0/19）**。
 全板 partial 计数待总监按 coverage-report 实际输出落账（IT-17 一条：预计 43 或按主档 42）。
 
+**MG-46 改判记录（2026-11-28，card/items-scope-triage，openmir2-10）**：① 表该行的处方
+（可注入时钟补「Run 后归 0」对拍）**前提经机检不成立**——oracle 的 StatusTimeArr 周期递减
+循环在 BaseObject.Base.cs Run 内**整段被注释**（死代码）；全仓唯一活递减 =
+DamageBubbleDefence（事件驱动、只 BubbleDefenceUP）⇒ 毒计时器从不衰减、「Run 后归 0」
+在 oracle 不存在（同 MG-55「oracle 无寿命代码」判型）；Rust 1:1 不实现且 components.rs:218
+显式登记 ⇒ 两侧一致非缺口，原登记 DEV-MG-46-RUNDECAY 作废（撤销条件 = oracle 恢复递减
+循环）。MG-46 改 ③-C 定性关账 + scope=full（DoSpell 四支矩阵已对拍）——**① 档余量由
+处方条目变为实际落地条目：本行移出 ①**。全板 partial 46→45（按 coverage-report 实际
+输出为准）。
+
