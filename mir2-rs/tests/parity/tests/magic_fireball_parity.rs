@@ -286,7 +286,16 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
         }
 
         // 4) HP 一级断言
-        for k in ["TargetHpBefore", "TargetHp", "CasterExtraAbil0"] {
+        // **MG-59 U-3（2026-11-29）**：`ExtraAbil0AfterRun`（到期后 ExtraAbil[0]；after=0、
+        // before/at=buff 值）+ `U3NTime`（两侧各自独立实测 nTime，毫秒）——只有 U-3 例两侧有键，
+        // 既有支双缺 ⇒ num() 双双回落 i64::MIN 恒等。
+        for k in [
+            "TargetHpBefore",
+            "TargetHp",
+            "CasterExtraAbil0",
+            "ExtraAbil0AfterRun",
+            "U3NTime",
+        ] {
             if num(gc, k) != num(rc, k) {
                 errs.push(format!(
                     "[{label}] {k} 不等：golden={} rust={}",
@@ -2880,10 +2889,22 @@ fn real_rust_ledger_tamming() {
 #[ignore = "需先跑 game-svr 三支驱动（tests::uenhancer_parity_*）生成真实台账"]
 fn real_rust_ledger_uenhancer() {
     // **MG-59（2026-11-28，① 档）**：`friend_target`（U-1）/`amulet_off_fail`（U-2 639 失败面）。
+    // **MG-59 U-3（2026-11-29，② 档）**：`u3_run_before_expiry`/`u3_run_after_expiry`/
+    // `u3_run_at_expiry`——buff 超时生命期面（到期前静默 / 到期 53→100+归 0 / 恰在边界
+    // 严格 `>` 不到期只出 10 秒预告）。
     real_ledger_verify_labels(
         "uenhancer",
         &golden_file("uenhancer.json"),
-        &["s1", "s5", "s13", "friend_target", "amulet_off_fail"],
+        &[
+            "s1",
+            "s5",
+            "s13",
+            "friend_target",
+            "amulet_off_fail",
+            "u3_run_before_expiry",
+            "u3_run_after_expiry",
+            "u3_run_at_expiry",
+        ],
     );
 }
 

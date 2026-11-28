@@ -233,3 +233,21 @@ IT-17、MG-64/65、MG-13/14、MG-15、MG-48、MG-59 U-1/U-2）+ MG-46 改判 ③
 ③-C；三笔待复验（MG-59 b24794b22 已并、MG-23 本笔）；他卡阻塞升满 2 条（IT-17/MG-48，
 B 类签收后）+ ② 档 2 卡（MG-12、MG-59 U-3）+ 归他卡项不在本车道。
 
+**MG-59 U-3 落地 + MG-59 升满（2026-11-29，card/items-scope-triage，openmir2-56）**：
+② 档卡 openmir2-mg59-u3-buff-timeout.md 落地——buff 生命期/超时面。装置 `MagicSpec.RunAfterMs`
+旋钮（null=关 / -1=到期后 500ms 哨兵 / -2=恰在到期边界哨兵 / 正值=固定偏移）+ RunMagicCase
+新支（排水后 `ClockSeam.Set(castTick+offset) + caster.Run()` 直调生产 `Run()`，heal-ticks
+先例同款；oracle 到期块 `PlayObject.Message.cs:168-227`：逐槽严格 `now > ExtraAbilTimes[i]`
+⇒ 清零+`HealthSpellChanged()`（53 优先级 68 先于 SysMsg 252）；预告臂 ⇒ 10 秒 SysMsg）。
+三支全自施（受惠者=caster）：`u3_run_before_expiry`（Run=1000 ⇒ 静默、buff=2、640 照常）/
+`u3_run_after_expiry`（-1⇒250500：53→100、归 0）/ `u3_run_at_expiry`（-2⇒恰 250000：
+严格 `>` 不成立 ⇒ 只出预告、buff=2）。`u3_n_time`=250000ms 全支一致（SC=15 零抽，
+GP13(60)+150）。Rust 驱动：交付循环上界 min(wait_ms, run_after)（640 due=1000 零重排）+
+tick 分支拨钟 `run_after-200`（tick_head Clock 段自推进 +200 ⇒ SimExtraAbil 恰落边界）+
+drain_extra_abil_expiries/flush_healthspell_slots 生产形状；RM 广播面 `hear_targets` 前置
+（tick 后取值为空，实测）。变异红→还原：M-U3 world.rs `>` 改 `>=` ⇒ 仅 u3_run_at_expiry 红
+（ExtraAbil0AfterRun 2→0 + 预告帧被 [53,恢复帧] 替换），其余 7 支绿；还原后同 id
+（mg59-u3-deliver3）8 驱动 + 比较器全绿。门禁 fmt/clippy/4232 lib/锚门/msgcodegen 全绿。
+金标纯插入（前缀 43018 字节逐字节不变）。**MG-59 scope=full（三面齐：U-1/U-2 已并 +
+U-3 本批）**，报总监裁定（派工单 opc-66 2026-11-29）。
+
