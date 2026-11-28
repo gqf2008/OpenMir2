@@ -552,6 +552,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "partial：读书四门(书表/已学/职业/等级) + 成功支 MagicList 终态&保序 + 帧逐字节 + 读路径 0 抽 已对拍；622 weight 面已点亮（second_book_keeps_weight，Recog=5/Series=36679，2026-11-28 master 5ea6bf5dd 验收）；657 HitSpeed/CharStatus 已由 m3 批点亮；【残留】item_list 元素比较=③-B 归属他卡 openmir2-itemlist-element-compare.md（已实现 2026-11-20、第二方待签）——按 MG-24 先例保持 partial，该卡签收后升满（总监 2026-11-28 裁定）",
       "evidence": {
         "test": "readbook::tests::it17a_read_book_host_parity",
         "test_file": "mir2-rs/bins/game-svr/src/readbook.rs",
