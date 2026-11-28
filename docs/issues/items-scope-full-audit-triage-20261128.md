@@ -153,3 +153,9 @@ percent_clamp_hp_only、M-IT04（池臂 AC/MAC 互换+MAC==0 错臂定向失效�
 发射面 oracle 不可观测（装置 v1 怪物只记录不 Operate，撤销=装置 v2）；Shape>=3 ③-C 不变。
 MG-13/14 位号面（target-prebuff 复用）与 MG-15 随后。
 
+**MG-64/65 升满落账（2026-11-28，opc-66 验收并 master 916d7e308）**：两条 scope=full（删
+scope 键、原文+验收引文入 notes）。复验：全量默认门 Both 模式（新 RunId、无 -Only）驱动
+217/217 + 比较器 55/55、零零匹配 PARITY_GATE_OK + workspace --lib 4231/0 + 金标准纯插入
+不变量核过。657 白名单放宽（恒 0x8000→毒高位在位）随笔确认入 notes。全板 scope≠full
+计数 48→46（按 coverage-report 实际输出为准）。
+
