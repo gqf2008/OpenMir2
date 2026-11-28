@@ -2065,8 +2065,8 @@ fn g3_anchor_a3_recipients_closure() {
             "let guild_rcpt = guild_recipients(&online, &world, &guild_ban);"
         )
         .len(),
-        4,
-        "C-2 四处快照"
+        5,
+        "C-2 五处快照（原四处 + G3 在线人数门的 drain_login_emergency_close，同一接缝）"
     );
 }
 

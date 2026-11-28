@@ -127,6 +127,11 @@ pub struct GameSvrConf {
     /// 出生点抽样条数（`ServerConf.cs:161` `ReadWriteByte`；`GameSvrConf.cs:1400` 初值 `2`）——
     /// `GetHomeInfo` 的 `Random(StartPointSize)`（`WorldServer.cs:1411-1413`）。
     pub start_point_size: u8,
+    /// `[Server] TestServerUserLimit`（`ServerConf.cs:26`；`GameSvrConf.cs:55/1258` 缺省 1000）
+    /// —— **G3 在线人数门**（`PlayObject.cs:1376-1383`）：`WorldEngine.PlayObjectCount`
+    /// 超过它且 `Permission < 2` ⇒ OnlineUserFull + ForceDisConnect 两条红字 +
+    /// `BoEmergencyClose`（无 `return`，登录序照走）。
+    pub test_user_limit: i32,
 }
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientConf.cs:6-24`（17 个 `bool`，声明序即序列化序）。
@@ -311,6 +316,9 @@ impl GameSvrConf {
             // `ServerConf.cs:160-161`：`ReadWriteByte`（截断口径与 `read_u8` 同）。
             safe_zone_size: read_u8(ini, "Setup", "SafeZoneSize", 10),
             start_point_size: read_u8(ini, "Setup", "StartPointSize", 2),
+            // `ServerConf.cs:26`：`ReadWriteInteger("Server", "TestServerUserLimit", …)`；
+            // 缺省 1000（`GameSvrConf.cs:1258`）；缺键不算错。
+            test_user_limit: ini.read_integer("Server", "TestServerUserLimit", 1000),
         }
     }
 
@@ -620,6 +628,8 @@ GatePort=5000
         assert_eq!(c.red_die_home_y, 668);
         assert_eq!(c.safe_zone_size, 10);
         assert_eq!(c.start_point_size, 2);
+        // **G3**：`[Server] TestServerUserLimit` 缺键 ⇒ 1000（`GameSvrConf.cs:1258`）。
+        assert_eq!(c.test_user_limit, 1000);
     }
 
     /// **判据 CF-2（出生点/安全区 11 键，文件值覆盖初值）**。
@@ -640,6 +650,8 @@ RedDieHomeX=7
 RedDieHomeY=8
 SafeZoneSize=3
 StartPointSize=5
+[Server]
+TestServerUserLimit=6000
 ",
         );
         assert_eq!(c.home_map, "3");
@@ -653,6 +665,8 @@ StartPointSize=5
         assert_eq!(c.red_die_home_y, 8);
         assert_eq!(c.safe_zone_size, 3);
         assert_eq!(c.start_point_size, 5);
+        // **G3**：`[Server] TestServerUserLimit=6000`（压测部署口径：必须 ≥ 目标在线数）。
+        assert_eq!(c.test_user_limit, 6000);
         // 空值 ⇒ 初值（`ReadWrite*` 的 `string.IsNullOrEmpty` 分支）。
         let d = GameSvrConf::from_bytes(
             b"[Setup]

@@ -29753,6 +29753,114 @@ fn drain_soft_close(
     }
 }
 
+/// **G3（在线人数门，卡 `openmir2-userlogon-login-gates`）**：登录时
+/// `PlayObjectCount > TestServerUserLimit && Permission < 2` 命中的会话延迟断连。
+///
+/// oracle 口径（`PlayObject.cs:1376-1383` + `PlayObject.Message.cs:367-377`）：门只置
+/// **裸 `BoEmergencyClose`**（无 `return`，登录序照走完）；同一次 `Run()` 的消息泵把登录帧
+/// 全部发出后，泵尾 `MakeGhost()`——**不发** `SM_OUTOFCONNECTION`（那只有 `BoKickFlag` 才发）、
+/// **不发** 104/SS_208（`!BoReconnection && BoSoftClose` 不成立）。
+///
+/// 本宿主的两条红 `SysMsg` 在登录**尾段**（654 之后的 `after` 段，sysmsg 优先级
+/// `(byte)RM_SYSMESSAGE=188`），由首次 AOI 扫描的 [`drain_login_tail`] 补发 ⇒ 断连必须等
+/// `login_tails` 清掉该键（oracle 是同一次 `Run()` 泵尾，本宿主至少隔一 tick——尾段补发模型
+/// 的既有登记，见 `login_tails` 头注）。会话刚建 ⇒ 交易不可能已开（`trade_sessions` 在登录点
+/// 以 `insert` 全量重建）⇒ 不需要 `deal_cancel_between`。
+///
+/// 红检（实测）：删掉登录点的 `login_emergency_close.push(...)` 或本函数的调用行 ⇒
+/// `g3_login_emergency_close_wiring_is_present` 必红；谓词/帧面行为牙在 `enter.rs` 的 `g3_*`。
+#[allow(clippy::too_many_arguments)]
+fn drain_login_emergency_close(
+    world: &mut mir2_world_bevy::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    online: &mut OnlineRegistry,
+    pending: &mut Vec<String>,
+    login_tails: &std::collections::HashMap<String, smframe::EnterWorldInputs>,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
+    displays: &mut downlink::DisplayTable,
+    registry: Option<&mir2_envir::MapRegistry>,
+    guilds: &mut mir2_world_bevy::GuildManager,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    guild_sections: &mir2_data::guild::GuildFileSections,
+    guild_msg_cfg: &guild_runtime::GuildMsgCfg,
+    guild_server_index: i32,
+) {
+    let mut not_yet: Vec<String> = Vec::new();
+    for chr in std::mem::take(pending) {
+        // 尾段还没补发（该键仍在 `login_tails`）⇒ 留到下 tick（oracle 泵尾消费的宿主形态）。
+        if login_tails.contains_key(&chr) {
+            not_yet.push(chr);
+            continue;
+        }
+        let Some(e) = online_take(online, &chr) else {
+            glog!(
+                "WRN",
+                "G3 在线人数门：ChrName:{chr} 已不在在线登记表 ⇒ 丢弃（登记）"
+            );
+            continue;
+        };
+        // 服务端主动断连 ⇒ 与 `drain_kicks`/`drain_soft_close` 同一归属口径（恰一次/会话）。
+        record_server_kick(&e);
+        // 关网关 socket（oracle 移除循环的 `CloseUser`）——**不发** `SM_OUTOFCONNECTION`。
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "G3 在线人数门断连") {
+            let _ = tx.send(SimToGate::KickUser { socket: e.socket });
+        }
+        // 存档：oracle 幽灵移除时的 `SaveHumanRcd`（`WorldServer.cs:707-716`）——退世界前拿实时态。
+        if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
+            save_human_rcd(db, engine, saved, &chr, world, sg, registry);
+        }
+        // G3 = 裸 `BoEmergencyClose` ⇒ `!BoReconnection && BoSoftClose` 不成立 ⇒ **无 104/SS_208**；
+        // check_save + 清槽照做（`DisconnectCtx` 两旗全 false，与 `drain_kicks` 同口径）。
+        let online = &*online;
+        let guild_ban: std::collections::HashMap<String, bool> = ground_sessions
+            .iter()
+            .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
+            .collect();
+        #[allow(clippy::needless_borrow)]
+        let guild_rcpt = guild_recipients(&online, &world, &guild_ban);
+        let guild_out = guild_runtime::on_disconnect(
+            guilds,
+            guild_store,
+            guild_sections,
+            guild_msg_cfg,
+            ground_sessions,
+            &guild_runtime::DisconnectCtx {
+                chr_name: &chr,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                now_tick: world.clock_ms as i32,
+                server_index: guild_server_index,
+            },
+            &guild_rcpt,
+        );
+        send_guild_notices(&guild_out.notices, online, gates);
+        drop(guild_rcpt);
+        log_guild_outcome(&guild_out, &chr);
+        match world.disconnect(&chr) {
+            Ok(()) => glog!(
+                "INF",
+                "G3 在线人数门：会话已离开世界 ChrName:{chr} socket={}（BoEmergencyClose ⇒ MakeGhost）",
+                e.socket
+            ),
+            Err(err) => glog!("WRN", "G3 在线人数门：会话离开世界失败 ChrName:{chr}：{err:?}"),
+        }
+        saves.remove(&chr);
+        // 清槽 + 摘展示表（与 `drain_kicks`/`drain_soft_close` 同处同语义；host aid 取自 remove 返回值）。
+        let closed_sg = ground_sessions.remove(&chr);
+        shop_sessions.remove(&chr);
+        sell_off_sessions.remove(&chr);
+        trade_sessions.remove(&chr);
+        cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
+    }
+    *pending = not_yet;
+}
+
 /// `CM_PICKUP`/`CM_DROPITEM` 的配置层输入（`Server.conf [Setup]`，逐条 oracle 缺省见 `config.rs`）。
 #[derive(Debug, Clone, Copy)]
 struct GroundCfg {
@@ -35702,6 +35810,8 @@ struct LoginCtx<'a> {
     engine: &'a mut load::FrontEngine,
     gates: &'a mut std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     login_tails: &'a mut std::collections::HashMap<String, smframe::EnterWorldInputs>,
+    /// **G3**：在线人数门命中的延迟断连表（`finish_login` 命中时 push；tick 排水消费）。
+    login_emergency_close: &'a mut Vec<String>,
     aoi_frames_total: &'a mut std::collections::HashMap<String, usize>,
     reconnect_pending: &'a mut Vec<ReconnectPending>,
     kick_pending: &'a mut Vec<String>,
@@ -35744,6 +35854,7 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
         engine,
         gates,
         login_tails,
+        login_emergency_close,
         aoi_frames_total,
         reconnect_pending,
         kick_pending,
@@ -36325,6 +36436,18 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                     test_server: enter_cfg.test_server,
                                     service_mode: enter_cfg.service_mode,
                                     pay_ment,
+                                    // **G3**：`WorldEngine.PlayObjectCount`（`WorldServer.cs:99`
+                                    // = `PlayObjectList.Count`，**含本会话**——oracle 的玩家在
+                                    // `UserLogon` 前已进列表；本宿主 `online_set` 已先于本点）。
+                                    play_object_count: i32::try_from(online.iter().count())
+                                        .unwrap_or(i32::MAX),
+                                    // **G3**：登录时刻的 `PlayObject.Permission`——oracle 内联
+                                    // `GetHumPermission` 调用被注释（`PlayObject.cs:1188`）⇒ 恒初始值；
+                                    // 与 `SessionGround` 同源（`gmcmd::startup_permission`，
+                                    // `MIR2_TEST_PERMISSION` 测试缝默认关）。
+                                    permission: gmcmd::startup_permission(),
+                                    // **G3**：两条红字的 `MsgColor.Red` 色词对。
+                                    red_msg: (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
                                 };
                                 for w in enter::apply(&mut inputs, &wx) {
                                     glog!("WRN", "入图帧输入：{w}");
@@ -36602,7 +36725,12 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                     // `SearchViewRange` 对其他 actor 的 `RM_TURN` 槽数
                                     // 变化（同优先级不是 FIFO）⇒ 首次扫描时才按真机
                                     // 堆布局重算（[`drain_login_tail`]）。
+                                    // **G3**：门命中 ⇒ 登记延迟断连（等登录尾段补发完才落地）。
+                                    let g3_close = inputs.emergency_close;
                                     login_tails.insert(head.chr_name.clone(), inputs);
+                                    if g3_close {
+                                        login_emergency_close.push(head.chr_name.clone());
+                                    }
                                     // **P2-3b**：会话进世界 ⇒ 记 `chr→片`（N=1 时目录为 None，空操作）。
                                     shard_router::note_entered(
                                         shard_directory.as_ref(),
@@ -37114,6 +37242,9 @@ struct LoginProc<'a> {
     gates: &'a mut std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     reconnect_pending: &'a mut Vec<ReconnectPending>,
     kick_pending: &'a mut Vec<String>,
+    /// **G3（在线人数门）**：登录时门命中的会话（`ProcessServices.login_emergency_close`
+    /// 的穿过引用；`finish_login` 命中时 push，tick 排水消费）。
+    login_emergency_close: &'a mut Vec<String>,
     pwd_sessions: &'a mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     npc_host: &'a mut Option<game_svr::npc::NpcHost>,
     guilds: &'a mut mir2_world_bevy::GuildManager,
@@ -37157,6 +37288,7 @@ fn finish_login_on_zone_state(
         trade_sessions: &mut state.host.trade_sessions,
         saves: &mut state.host.saves,
         login_tails: &mut state.host.login_tails,
+        login_emergency_close: &mut *proc.login_emergency_close,
         aoi_frames_total: &mut state.host.aoi_frames_total,
         engine: &mut *proc.engine,
         gates: &mut *proc.gates,
@@ -38476,6 +38608,8 @@ fn sim_loop(
     let kick_pending: Vec<String> = Vec::new();
     // 账号级顶号（`SS_CLOSESESSION` ⇒ `KickUser`）：提示帧已即时发出，离开世界/清槽隔一 tick 落地。
     let soft_close_pending: Vec<String> = Vec::new();
+    // **G3（在线人数门）**：登录时门命中的会话（见 svc 同名字段与 [`drain_login_emergency_close`]）。
+    let login_emergency_close: Vec<String> = Vec::new();
     // `GateIdx -> 该网关连接的 sim→gate 通道`（`NetChannel` 按 gateIdx 选连接，`TCPNetChannel.cs:221-223`）
     let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
         std::collections::HashMap::new();
@@ -38902,6 +39036,7 @@ fn sim_loop(
         reconnect_pending,
         kick_pending,
         soft_close_pending,
+        login_emergency_close,
         gm_filter_word,
         gm_mission,
         gm_spirit_mutiny_tick,
@@ -39262,6 +39397,10 @@ struct ProcessServices {
     reconnect_pending: Vec<ReconnectPending>,
     kick_pending: Vec<String>,
     soft_close_pending: Vec<String>,
+    /// **G3（在线人数门）**：登录时门命中的会话——等登录尾段补发完再断连
+    /// （oracle `BoEmergencyClose` 在 `UserLogon` 同一次 `Run()` 泵尾消费；
+    /// 本宿主尾段要等首次 AOI 扫描 ⇒ 至少隔一 tick，见 [`drain_login_emergency_close`]）。
+    login_emergency_close: Vec<String>,
     gm_filter_word: std::cell::Cell<bool>,
     gm_mission: std::cell::RefCell<gmcmd::GmMissionState>,
     gm_spirit_mutiny_tick: std::cell::Cell<i64>,
@@ -39398,6 +39537,7 @@ impl ProcessServices {
             castle_store: None,
             castle_war_states: std::collections::HashMap::new(),
             pending_gm_castle_broadcasts: Vec::new(),
+            login_emergency_close: Vec::new(),
             online_hum_gate: startup_online_hum_gate(),
             npc_host: None,
             merchant_book: game_svr::npc::MerchantScriptBook::new(0),
@@ -41548,6 +41688,7 @@ impl HostLoop {
             let mut reconnect_pending = &mut svc.reconnect_pending;
             let mut kick_pending = &mut svc.kick_pending;
             let mut soft_close_pending = &mut svc.soft_close_pending;
+            let mut login_emergency_close = &mut svc.login_emergency_close;
             let gm_filter_word = &mut svc.gm_filter_word;
             let gm_mission = &mut svc.gm_mission;
             let gm_spirit_mutiny_tick = &mut svc.gm_spirit_mutiny_tick;
@@ -41705,6 +41846,7 @@ impl HostLoop {
                                             engine: &mut engine,
                                             gates: &mut gates,
                                             login_tails: &mut login_tails,
+                                            login_emergency_close: &mut login_emergency_close,
                                             aoi_frames_total: &mut aoi_frames_total,
                                             reconnect_pending: &mut reconnect_pending,
                                             kick_pending: &mut kick_pending,
@@ -41812,6 +41954,8 @@ impl HostLoop {
                                                             reconnect_pending:
                                                                 &mut reconnect_pending,
                                                             kick_pending: &mut kick_pending,
+                                                            login_emergency_close:
+                                                                &mut login_emergency_close,
                                                             pwd_sessions: &mut pwd_sessions,
                                                             npc_host: &mut npc_host,
                                                             guilds: &mut guilds,
@@ -42037,6 +42181,30 @@ impl HostLoop {
                 &gates,
                 &mut online,
                 &mut kick_pending,
+                &mut db,
+                &mut engine,
+                &mut saves,
+                &mut ground_sessions,
+                &mut shop_sessions,
+                &mut sell_off_sessions,
+                &mut trade_sessions,
+                &mut displays,
+                registry.as_ref(),
+                &mut guilds,
+                guild_store.as_ref(),
+                &enter_cfg.guild_sections,
+                &enter_cfg.guild_msg_cfg,
+                i32::from(enter_cfg.server_index),
+            );
+            // **G3（在线人数门）**：登录时门命中的会话——尾段补发完（`login_tails` 无该键）
+            // 才落地断连；同一 tick 里它在 AOI 段之前跑 ⇒ 实际落地在下一 tick（模型登记见
+            // [`drain_login_emergency_close`] 头注）。
+            drain_login_emergency_close(
+                &mut world,
+                &gates,
+                &mut online,
+                &mut login_emergency_close,
+                &login_tails,
                 &mut db,
                 &mut engine,
                 &mut saves,
@@ -48594,6 +48762,32 @@ mod tests {
         assert!(
             prod.contains("login_ctor_tick,"),
             "enter_map_at 必须收到 login_ctor_tick"
+        );
+    }
+
+    /// **G3 接线保鲜门（卡 `openmir2-userlogon-login-gates`）**：登录点必须把
+    /// `inputs.emergency_close` 登记进 `login_emergency_close`，且 tick 排水必须消费它。
+    ///
+    /// 红检（实测）：删掉登录点的 push 行或 [`drain_login_emergency_close`] 调用行 ⇒ 本用例必红
+    /// （谓词/帧面的行为牙在 `enter.rs`：`g3_*` 四牙；配置/文本牙在 `envir::conf`/`strings`）。
+    #[test]
+    fn g3_login_emergency_close_wiring_is_present() {
+        let src = include_str!("lib.rs");
+        let push_anchor = concat!("login_emergency_close.push(head.chr_", "name.clone());");
+        assert_eq!(
+            src.matches(push_anchor).count(),
+            1,
+            "G3 延迟断连登记（登录点 push）必须恰一处"
+        );
+        let call_anchor = concat!("            drain_login_emergency_", "close(");
+        assert_eq!(
+            src.matches(call_anchor).count(),
+            1,
+            "tick 排水必须恰一处调用 drain_login_emergency_close"
+        );
+        assert!(
+            src.contains("let g3_close = inputs.emergency_close;"),
+            "登录点必须从 EnterWorldInputs.emergency_close 取谓词"
         );
     }
 
@@ -135457,6 +135651,7 @@ mod finish_login_tests {
             std::collections::HashMap::new();
         let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
         let mut kick_pending: Vec<String> = Vec::new();
+        let mut login_emergency_close: Vec<String> = Vec::new();
         let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
             std::collections::HashMap::new();
         let mut npc_host: Option<game_svr::npc::NpcHost> = None;
@@ -135506,6 +135701,7 @@ mod finish_login_tests {
             engine: &mut engine,
             gates: &mut gates,
             login_tails: &mut login_tails,
+            login_emergency_close: &mut login_emergency_close,
             aoi_frames_total: &mut aoi_frames_total,
             reconnect_pending: &mut reconnect_pending,
             kick_pending: &mut kick_pending,
@@ -135789,6 +135985,7 @@ mod zone_login_landing_tests {
         gates.insert(0, tx);
         let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
         let mut kick_pending: Vec<String> = Vec::new();
+        let mut login_emergency_close: Vec<String> = Vec::new();
         let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
             std::collections::HashMap::new();
         let mut npc_host: Option<game_svr::npc::NpcHost> = None;
@@ -135819,6 +136016,7 @@ mod zone_login_landing_tests {
                 gates: &mut gates,
                 reconnect_pending: &mut reconnect_pending,
                 kick_pending: &mut kick_pending,
+                login_emergency_close: &mut login_emergency_close,
                 pwd_sessions: &mut pwd_sessions,
                 npc_host: &mut npc_host,
                 guilds: &mut guilds,
@@ -135949,6 +136147,7 @@ mod zone_disconnect_tests {
         gates.insert(0, tx);
         let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
         let mut kick_pending: Vec<String> = Vec::new();
+        let mut login_emergency_close: Vec<String> = Vec::new();
         let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
             std::collections::HashMap::new();
         let mut npc_host: Option<game_svr::npc::NpcHost> = None;
@@ -135980,6 +136179,7 @@ mod zone_disconnect_tests {
                 gates: &mut gates,
                 reconnect_pending: &mut reconnect_pending,
                 kick_pending: &mut kick_pending,
+                login_emergency_close: &mut login_emergency_close,
                 pwd_sessions: &mut pwd_sessions,
                 npc_host: &mut npc_host,
                 guilds: &mut guilds,

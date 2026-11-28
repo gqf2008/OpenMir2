@@ -1365,6 +1365,10 @@ pub struct EnterWorldInputs {
     /// `PayMent == 3`（`TestServer || ServiceMode` 覆盖后的值，`PlayObject.cs:1145-1148`）：
     /// 第四条 `SysMsg`（`NowIsFreePlayMode`）的入队门（`:1417-1420`）。
     pub pay_ment_three: bool,
+    /// **G3**（`PlayObject.cs:1376-1383`）：在线人数门命中 ⇒ `BoEmergencyClose = true`
+    /// （oracle **无 `return`**，登录序照走完；宿主在登录尾段补发完后断连，
+    /// 见 `drain_login_emergency_close`）。`false` = 未命中。
+    pub emergency_close: bool,
     /// **`openmir2-login-charstatus-657`**：`RecalcAbilitys()` 收尾两条 `RM_CHARSTATUSCHANGED`
     /// 的载荷 `(CharStatus, PlayObject.HitSpeed)`。
     ///
@@ -1407,6 +1411,14 @@ pub struct LoginSysMsgs {
     pub notice: Option<Vec<u8>>,
     /// 槽 3：`MessageSettings.NowIsFreePlayMode`（仅 `PayMent==3` 入队）。
     pub free_play: Option<Vec<u8>>,
+    /// **G3** 槽 4：`MessageSettings.OnlineUserFull`（仅在线人数门命中入队，
+    /// `PlayObject.cs:1376-1378`；红字）。
+    pub online_user_full: Option<Vec<u8>>,
+    /// **G3** 槽 5：`MessageSettings.ForceDisConnect`（同上门命中，`PlayObject.cs:1379`；红字）。
+    pub force_disconnect: Option<Vec<u8>>,
+    /// `MsgColor.Red` 的 `(RedMsgFColor, RedMsgBColor)`（缺省 0xFF/0x38，
+    /// `GameSvrConf.cs:1536-1537`）：槽 4/5 的 `SM_SYSMESSAGE.Param = make_word(f, b)`。
+    pub red: (u8, u8),
     /// `MsgColor.Green` 的 `(GreenMsgFColor, GreenMsgBColor)`（`BaseObject.cs:1645-1652`；
     /// 落在 `SM_SYSMESSAGE.Param = make_word(f, b)`，`PlayObject.Message.cs:1715`）。
     pub green: (u8, u8),
@@ -1421,7 +1433,20 @@ impl LoginSysMsgs {
             1 => self.change_help.as_deref(),
             2 => self.notice.as_deref(),
             3 => self.free_play.as_deref(),
+            4 => self.online_user_full.as_deref(),
+            5 => self.force_disconnect.as_deref(),
             _ => None,
+        }
+    }
+
+    /// 槽号 → `(fColor, bColor)`（oracle `SysMsg` 按 `MsgColor` 分发色词：槽 0-3 绿、
+    /// 槽 4/5（G3 在线门）红——`BaseObject.cs:1678` 的 `MsgColor.Red` 支读
+    /// `[Setup] RedMsgFColor/RedMsgBColor`）。
+    #[must_use]
+    pub fn color(&self, slot: u8) -> (u8, u8) {
+        match slot {
+            4..=5 => self.red,
+            _ => self.green,
         }
     }
 }
@@ -1662,6 +1687,13 @@ impl EnterWorldInputs {
         queue.enqueue(LoginQueued::SysMsg(1), prio_sysmsg);
         if self.test_server {
             queue.enqueue(LoginQueued::SysMsg(2), prio_sysmsg);
+        }
+        // **G3（在线人数门，`PlayObject.cs:1376-1383`）**：入队门 = 谓词本身（`emergency_close`；
+        // oracle 侧在 `if (!TryPlayMode)` 块内）。正文缺失仍占堆、出队不产帧（同槽 1 口径）。
+        // 位置 = `StartNoticeMsg` 之后、六条 `SendPriorityMsg` 之前（oracle 源码序 1376 < 1385）。
+        if self.emergency_close {
+            queue.enqueue(LoginQueued::SysMsg(4), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(5), prio_sysmsg);
         }
         // ④ 六条 SendPriorityMsg（`PlayObject.cs:1385-1390`），**源码序**：
         //    52,752,811,46,621,211。堆在同一内容下自然给出真机序 52,752,621,211,811,46。
@@ -1941,7 +1973,7 @@ impl EnterWorldInputs {
                     // `SM_SYSMESSAGE(ActorId, make_word(f, b), 0, 1)` + `EncodeString(正文)`。
                     // 正文缺失 ⇒ 不产帧（槽位已按 oracle 占堆）。
                     if let Some(msg) = self.login_sys_msgs.text(slot) {
-                        let (f, b) = self.login_sys_msgs.green;
+                        let (f, b) = self.login_sys_msgs.color(slot);
                         out.push(sm_sysmessage(
                             self.actor_id,
                             u16::from(f),
@@ -2777,6 +2809,7 @@ mod tests {
             // `frames()` 产出与抓包**逐字节相同**的两条 657（`actor_id` 取自 ident=51 帧的 Recog）。
             // 旧注释「抓包截到 10、不含 657」与文件事实相反（已订正）。
             char_status: Some((0, 0)),
+            emergency_close: false,
         }
     }
 
@@ -2966,6 +2999,7 @@ mod tests {
             pay_ment_three: true,
             // `RecalcAbilitys` 的两条 657 载荷（`CharStatus=0`、`HitSpeed=0`：金标准/真机同值）。
             char_status: Some((0, 0)),
+            emergency_close: false,
         };
         let got: Vec<u16> = inputs
             .frames()
@@ -3026,6 +3060,7 @@ mod tests {
             // C# 在 `654` 之后发 `657,657`，字段 `Recog=自己, Param=0, Tag=0, Series=0`
             // ⇒ `(CharStatus=0, HitSpeed=0)`。
             char_status: Some((0, 0)),
+            emergency_close: false,
         }
     }
 
@@ -3445,6 +3480,7 @@ mod tests {
                 "禁止使用任何外挂、加速、辅助、脱机，一经发现，封号封IP",
             )),
             green: (f, b),
+            ..Default::default()
         };
         // c3 抓包时同屏 16 个其他 actor（16 对 10/41）⇒ 16 个 RM_TURN(17) 槽位。
         let others = vec![OtherAppear::Turn; 16];
@@ -3517,6 +3553,7 @@ mod tests {
                 notice: Some(b"C".to_vec()),
                 free_play: Some(b"D".to_vec()),
                 green: (0xDB, 0xFF),
+                ..Default::default()
             };
             let (before, after) = inputs.frames_split_with_others(&vec![OtherAppear::Turn; n]);
             assert!(

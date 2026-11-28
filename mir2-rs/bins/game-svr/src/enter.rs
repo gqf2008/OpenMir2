@@ -89,6 +89,15 @@ pub struct WorldFrameInputs<'a> {
     pub service_mode: bool,
     /// `LoadDBInfo.PayMent`（`PlayObject.cs:1145-1148` 覆盖前的值；`TestServer||ServiceMode` ⇒ 3）。
     pub pay_ment: i32,
+    /// **G3**：`WorldEngine.PlayObjectCount`（`WorldServer.cs:99` 的 `GetUserCount()` =
+    /// `PlayObjectList.Count`，**含本会话**——oracle 的玩家在 `UserLogon` 前已进列表）。
+    pub play_object_count: i32,
+    /// **G3**：登录时刻的 `PlayObject.Permission`。oracle `UserLogon` 里的内联
+    /// `GetHumPermission` 调用被注释（`PlayObject.cs:1188`）⇒ 生产恒初始值；Rust 侧与
+    /// `SessionGround` 同源（`gmcmd::startup_permission`，测试缝默认关）。
+    pub permission: u8,
+    /// **G3**：`MsgColor.Red` 的色词对（`[Setup] RedMsgFColor/RedMsgBColor`，缺省 0xFF/0x38）。
+    pub red_msg: (u8, u8),
 }
 
 /// `PlayObject.RecalcAbilitys()`（`BaseObject.Abil.cs:15` + `PlayObject.cs:2008`）的一次输入。
@@ -973,6 +982,8 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
     };
     base.pay_ment_three = pay_ment == 3;
     base.login_sys_msgs.green = wx.green_msg;
+    // **G3**：红字色词（`MsgColor.Red` ⇒ 槽 4/5 的 `SM_SYSMESSAGE.Param`）。
+    base.login_sys_msgs.red = wx.red_msg;
     if let Some(strings) = wx.strings {
         base.login_sys_msgs.change_help = Some(gbk(strings.start_change_attack_mode_help()));
         if wx.test_server {
@@ -988,6 +999,18 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
 
     match wx.conf {
         Some(conf) => {
+            // **G3（在线人数门，`PlayObject.cs:1376-1383`，oracle `if (!TryPlayMode)` 块内）**：
+            // Rust 登录时 `TryPlayMode` 恒 false（`Initialize()` 在 `UserLogon` 里已复位，
+            // `PlayObject.cs:909`）⇒ 门无条件生效。谓词 = `PlayObjectCount > TestUserLimit`
+            // **且** `Permission < 2` ⇒ 两条红 `SysMsg`（槽 4/5）+ `BoEmergencyClose`
+            // （**无 `return`**，登录序照走完；oracle 泵尾 `MakeGhost`，宿主侧延迟断连）。
+            if wx.play_object_count > conf.test_user_limit && i32::from(wx.permission) < 2 {
+                if let Some(strings) = wx.strings {
+                    base.emergency_close = true;
+                base.login_sys_msgs.online_user_full = Some(gbk(strings.online_user_full()));
+                    base.login_sys_msgs.force_disconnect = Some(gbk(strings.force_disconnect()));
+                }
+            }
             // 门：`SoftVersionDateEx == 0 ⇒ SendServerConfig/SendGoldInfo 直接 return`。
             if wx.soft_version_date != 0 {
                 base.client_conf = Some(conf.client_conf.to_bytes());
@@ -1011,7 +1034,7 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             }
         }
         None => warns.push(
-            "未加载 Server.conf（GameSvrConf）⇒ 帧 11029/1106/5008/811 跳过（登记）".to_string(),
+            "未加载 Server.conf（GameSvrConf）⇒ 帧 11029/1106/5008/811 跳过（登记）；G3 在线人数门同跳过".to_string(),
         ),
     }
 
@@ -3256,6 +3279,198 @@ mod tests {
         assert!(
             level_rank_reply(-1, 0, &players, &heroes).is_none(),
             "page<0 ⇒ 零帧"
+        );
+    }
+
+    // ===== G3 在线人数门（`PlayObject.cs:1376-1383`；卡 `openmir2-userlogon-login-gates`）=====
+
+    /// **G3 命中牙**：`PlayObjectCount > TestServerUserLimit && Permission < 2` ⇒ 两条红
+    /// `SysMsg`（槽 4/5，`MsgColor.Red` 0xFF/0x38 ⇒ `Param = 0x38FF`）+ `emergency_close`；
+    /// 两条 100 帧落在**尾段**（`frames_split().1`，sysmsg 优先级 `(byte)RM_SYSMESSAGE=188`），
+    /// 且槽 4 紧邻槽 5 之前（oracle `:1376` → `:1379` 的入队序）。
+    ///
+    /// 红检（实测）：删 `base.emergency_close = true;` ⇒ flag 断言红；把 `>` 变异成 `>=` ⇒
+    /// `g3_silent_at_exact_limit` 红；把 `< 2` 变异成 `<= 2` ⇒ `g3_silent_when_permission_ge_2` 红。
+    #[test]
+    fn g3_over_limit_low_permission_fires_two_red_sysmsgs() {
+        let conf = GameSvrConf::from_bytes(b"[Server]\nTestServerUserLimit=2\n");
+        let strings = crate::strings::StringConf::defaults();
+        let mut base = EnterWorldInputs {
+            actor_id: 7,
+            ..EnterWorldInputs::default()
+        };
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: Some(&conf),
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: Some(&strings),
+            show_name: None,
+            logon: None,
+            ability: None,
+            green_msg: (0xDB, 0xFF),
+            test_server: false,
+            service_mode: false,
+            pay_ment: 0,
+            play_object_count: 3,
+            permission: 0,
+            red_msg: (0xFF, 0x38),
+        };
+        let _warns = apply(&mut base, &wx);
+        assert!(base.emergency_close, "门命中 ⇒ BoEmergencyClose");
+        let t4 = gbk("可允许的玩家数量已满");
+        let t5 = gbk("连接被强行中断!!!");
+        assert_eq!(base.login_sys_msgs.text(4), Some(t4.as_slice()));
+        assert_eq!(base.login_sys_msgs.text(5), Some(t5.as_slice()));
+        let (before, after) = base.frames_split();
+        assert!(
+            !before
+                .iter()
+                .any(|f| CommandMessage::from_bytes(f).unwrap().ident == 100),
+            "登录 SysMsg 全在尾段（优先级 188，晚于 RM_TURN 的一切）"
+        );
+        let expected4 = crate::smframe::sm_sysmessage(7, 0xFF, 0x38, &t4);
+        let expected5 = crate::smframe::sm_sysmessage(7, 0xFF, 0x38, &t5);
+        let pos = |v: &[Vec<u8>], pat: &[u8]| v.iter().position(|f| f.as_slice() == pat);
+        let (p4, p5) = (pos(&after, &expected4), pos(&after, &expected5));
+        assert!(p4.is_some(), "尾段必须含 OnlineUserFull 原文帧（逐字节）");
+        assert!(p5.is_some(), "尾段必须含 ForceDisConnect 原文帧（逐字节）");
+        assert_eq!(
+            p4.unwrap().abs_diff(p5.unwrap()),
+            1,
+            "两条紧邻（同优先级 188 的出队序由 .NET 四叉堆复刻决定，不复核 FIFO）"
+        );
+        assert_eq!(
+            CommandMessage::from_bytes(&after[p4.unwrap()])
+                .unwrap()
+                .param,
+            0x38FF_u16,
+            "红字色词 Param = make_word(0xFF, 0x38)"
+        );
+    }
+
+    /// **G3 边界负例**：`PlayObjectCount == TestServerUserLimit` ⇒ **不**触发
+    /// （oracle `>` 严格大于；把 `>` 变异成 `>=` ⇒ 本牙必红）。
+    #[test]
+    fn g3_silent_at_exact_limit() {
+        let conf = GameSvrConf::from_bytes(b"[Server]\nTestServerUserLimit=2\n");
+        let strings = crate::strings::StringConf::defaults();
+        let mut base = EnterWorldInputs::default();
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: Some(&conf),
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: Some(&strings),
+            show_name: None,
+            logon: None,
+            ability: None,
+            green_msg: (0xDB, 0xFF),
+            test_server: false,
+            service_mode: false,
+            pay_ment: 0,
+            play_object_count: 2,
+            permission: 0,
+            red_msg: (0xFF, 0x38),
+        };
+        let _ = apply(&mut base, &wx);
+        assert!(!base.emergency_close, "恰等界不触发");
+        assert_eq!(base.login_sys_msgs.text(4), None);
+        assert_eq!(base.login_sys_msgs.text(5), None);
+        let (_, after) = base.frames_split();
+        assert_eq!(
+            after
+                .iter()
+                .filter(|f| CommandMessage::from_bytes(f).unwrap().ident == 100)
+                .count(),
+            1,
+            "只有常发的 StartChangeAttackModeHelp 一条 100"
+        );
+    }
+
+    /// **G3 权限负例**：`Permission == 2`（压测号提权口径）⇒ **不**触发
+    /// （把 `< 2` 变异成 `<= 2` ⇒ 本牙必红）。
+    #[test]
+    fn g3_silent_when_permission_ge_2() {
+        let conf = GameSvrConf::from_bytes(b"[Server]\nTestServerUserLimit=2\n");
+        let strings = crate::strings::StringConf::defaults();
+        let mut base = EnterWorldInputs::default();
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: Some(&conf),
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: Some(&strings),
+            show_name: None,
+            logon: None,
+            ability: None,
+            green_msg: (0xDB, 0xFF),
+            test_server: false,
+            service_mode: false,
+            pay_ment: 0,
+            play_object_count: 3,
+            permission: 2,
+            red_msg: (0xFF, 0x38),
+        };
+        let _ = apply(&mut base, &wx);
+        assert!(!base.emergency_close, "权限 ≥ 2 豁免");
+        assert_eq!(base.login_sys_msgs.text(4), None);
+        assert_eq!(base.login_sys_msgs.text(5), None);
+    }
+
+    /// **G3 退化形态**：`Server.conf` 缺失 ⇒ 门跳过（登记；复用既有 conf-None 警示一支，
+    /// 文本含「G3 在线人数门同跳过」）。绝不猜 `TestServerUserLimit`。
+    #[test]
+    fn g3_conf_missing_skips_and_registers() {
+        let strings = crate::strings::StringConf::defaults();
+        let mut base = EnterWorldInputs::default();
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: None,
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: Some(&strings),
+            show_name: None,
+            logon: None,
+            ability: None,
+            green_msg: (0xDB, 0xFF),
+            test_server: false,
+            service_mode: false,
+            pay_ment: 0,
+            play_object_count: 999_999,
+            permission: 0,
+            red_msg: (0xFF, 0x38),
+        };
+        let warns = apply(&mut base, &wx);
+        assert!(!base.emergency_close, "conf 缺失 ⇒ 门不置位");
+        assert_eq!(base.login_sys_msgs.text(4), None);
+        assert!(
+            warns.iter().any(|w| w.contains("G3 在线人数门同跳过")),
+            "conf-None 登记必须提及 G3：{warns:?}"
         );
     }
 }

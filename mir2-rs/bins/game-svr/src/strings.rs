@@ -105,6 +105,10 @@ pub const DEFAULT_START_CHANGE_ATTACK_MODE_HELP: &str = "使用组合快捷键 C
 pub const DEFAULT_START_NOTICE_MSG: &str = "欢迎进入本服务器进行游戏...";
 /// `MessageSettings.NowIsFreePlayMode`（`MessageSettings.cs:38`；`StringConf.cs:53` 读键）——`PayMent==3` 的第四条。
 pub const DEFAULT_NOW_IS_FREE_PLAY_MODE: &str = "当前服务器运行于测试模式.";
+/// **G3**：`[String] OnlineUserFull`（在线人数门第 1 条；缺键回落 `MessageSettings.cs:36`）。
+pub const DEFAULT_ONLINE_USER_FULL: &str = "可允许的玩家数量已满";
+/// **G1/G3**：`[String] ForceDisConnect`（强制断开收尾；缺键回落 `MessageSettings.cs:33`）。
+pub const DEFAULT_FORCE_DISCONNECT: &str = "连接被强行中断!!!";
 
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
@@ -220,6 +224,10 @@ pub struct StringConf {
     start_change_attack_mode_help: Option<String>,
     start_notice_msg: Option<String>,
     now_is_free_play_mode: Option<String>,
+    // **G3（`PlayObject.cs:1376-1383`）**：在线人数门的两条红字
+    // （`StringConf.cs:48/51` 读键，键名与 `MessageSettings` 静态字段同源）。
+    online_user_full: Option<String>,
+    force_disconnect: Option<String>,
     // `[String]` 喊话三键（`StringConf.cs:257-259`）。
     you_need_level_msg: Option<String>,
     this_map_disable_send_cycy_msg: Option<String>,
@@ -613,6 +621,22 @@ impl StringConf {
             .as_deref()
             .unwrap_or(DEFAULT_NOW_IS_FREE_PLAY_MODE)
     }
+
+    /// `[String] OnlineUserFull`（G3 在线人数门第 1 条；缺键回落 `MessageSettings.cs:36`）。
+    #[must_use]
+    pub fn online_user_full(&self) -> &str {
+        self.online_user_full
+            .as_deref()
+            .unwrap_or(DEFAULT_ONLINE_USER_FULL)
+    }
+
+    /// `[String] ForceDisConnect`（G1/G3 的强制断开收尾；缺键回落 `MessageSettings.cs:33`）。
+    #[must_use]
+    pub fn force_disconnect(&self) -> &str {
+        self.force_disconnect
+            .as_deref()
+            .unwrap_or(DEFAULT_FORCE_DISCONNECT)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -746,6 +770,8 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             }
             (Section::String, "STARTNOTICEMSG") => &mut conf.start_notice_msg,
             (Section::String, "NOWISFREEPLAYMODE") => &mut conf.now_is_free_play_mode,
+            (Section::String, "ONLINEUSERFULL") => &mut conf.online_user_full,
+            (Section::String, "FORCEDISCONNECT") => &mut conf.force_disconnect,
             (Section::String, "YOUNEEDLEVELSENDMSG") => &mut conf.you_need_level_msg,
             (Section::String, "THISMAPDISABLESENDCYCYMSG") => {
                 &mut conf.this_map_disable_send_cycy_msg
@@ -1024,5 +1050,35 @@ Other=1
             repair_gbk,
             "缺键默认值的 cp936 字节与部署值同串"
         );
+    }
+
+    /// **G3 文本键牙**：`[String] OnlineUserFull/ForceDisConnect` 逐键解析 + 逐键回落
+    /// （`StringConf.cs:51/48` 读键；缺键回落 `MessageSettings.cs:36/33` 源码默认）。
+    ///
+    /// 红检（实测）：删 parse 里任一对应臂 ⇒ 该键断言红；把两臂接反 ⇒ 两断言同时红。
+    #[test]
+    fn parses_g3_deny_keys_and_falls_back_per_key() {
+        // cp936 实编码（独立来源生成，同 `parses_sysmsg_text_keys…` 的口径）。
+        let full_gbk: &[u8] =
+            b"\xbf\xc9\xd4\xca\xd0\xed\xb5\xc4\xcd\xe6\xbc\xd2\xca\xfd\xc1\xbf\xd2\xd1\xc2\xfa";
+        let kick_gbk: &[u8] = b"\xc1\xac\xbd\xd3\xb1\xbb\xc7\xbf\xd0\xd0\xd6\xd0\xb6\xcf!!!";
+
+        let mut bytes = b"[String]".to_vec();
+        bytes.extend_from_slice(b"\nOnlineUserFull=");
+        bytes.extend_from_slice(full_gbk);
+        bytes.extend_from_slice(b"\nForceDisConnect=");
+        bytes.extend_from_slice(kick_gbk);
+        bytes.push(b'\n');
+        let c = parse(&bytes);
+        assert_eq!(c.online_user_full(), "可允许的玩家数量已满");
+        assert_eq!(c.force_disconnect(), "连接被强行中断!!!");
+        // 编码路径只有一条：读进来的 cp936 字节，出帧 `gbk()` 编回同一串。
+        assert_eq!(crate::downlink::gbk(c.online_user_full()), full_gbk);
+        assert_eq!(crate::downlink::gbk(c.force_disconnect()), kick_gbk);
+
+        // 缺键 ⇒ 全默认（等于 `MessageSettings` 源码默认值）。
+        let d = parse(b"[String]".to_vec().as_slice());
+        assert_eq!(d.online_user_full(), "可允许的玩家数量已满");
+        assert_eq!(d.force_disconnect(), "连接被强行中断!!!");
     }
 }
