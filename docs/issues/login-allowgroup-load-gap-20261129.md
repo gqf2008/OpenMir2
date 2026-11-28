@@ -1,10 +1,37 @@
-# LOGIN-ALLOWGROUP-LOAD-GAP — 登录不恢复 `AllowGroup` 开关（oracle 恢复；未登记 parity 缺口，新登记待裁决）
+# LOGIN-ALLOWGROUP-LOAD-GAP — 登录不恢复 `AllowGroup` 开关（oracle 恢复；**已修，路线照卡内候选**）
 
 > 登记日：2026-11-29。登记来源：DEV-HANDOFF-GROUP 残差机检（总监令第 2 条「member 重登组关系
-> 是否从 DB 恢复」）的衍生发现。板外文件卡（非 parity 台账；修复时按流程取 `T-` 号）。
-> **本卡只登记，不落修复**——修复属登录 parity 面，超出 DEV-HANDOFF-GROUP/LIMBO 两笔授权范围。
+> 是否从 DB 恢复」）的衍生发现。板外文件卡（非 parity 台账；合并后按流程取 `T-` 号）。
+>
+> **收口状态（2026-11-29）**：总监核三锚后**授权修复**（「真 parity 缺口，影响所有重登玩家」）。
+> 已照卡内候选落地：`LoginScalarTarget` 增 `set_login_allow_group`（oracle `:1146` 同形），
+> 见下方「修复」节；「现象/机检证据/修复候选」为登记时原文（存档）。
 
-## 现象
+## 修复（总监授权 2026-11-29；分支 `card/login-allowgroup-load-gap`，已并 master `420930ca0`）
+
+- **落点**：`LoginScalarTarget` trait 增 `set_login_allow_group`；`EntitySpawn`/`EntityMut`
+  两 impl 各加一字段装载（`allow_group` / `group.allow_group`）；
+  `apply_login_record_scalars` 尾加
+  `ent.set_login_allow_group(data.is_some_and(|d| d.allow_group > 0))`
+  （oracle `WorldServer.cs:1146` 同形：`> 0` 语义、无记录不置位）。
+  trait 文档补 `AllowGroup` 条目（`:1146` 出处、存侧 T-272 交叉引用）。
+- **行为牙（修前钉缺口 → 修复翻绿）**：
+  - 修前：`login_does_not_load_allow_group_switch_from_record` 绿（缺口确认，1 passed）；
+  - 修后：改名 `login_loads_allow_group_switch_from_record` 翻断言——`allow_group=1` ⇒
+    实体 true（1 passed）；反面 `allow_group=0` ⇒ false（`>0` 语义）；无记录 ⇒ false
+    （ctor 缺省）；组本体不恢复（oracle 离线即退组一致）保持断言。
+- **端到端牙（总监节奏提示）**：`relogin_restores_allow_group_and_reinvite_succeeds`——
+  全链生产件：成员在场（旧实体开关 false）→ 断线收口 → 登录装载（录 `allow_group=1`）→
+  进图 ⇒ **组长重邀成功面**：`party_create_group` 得 `CreateGroupOk`、无 `CreateGroupFail`
+  （**修前此面是 -4**）；双方 owner 指组长（组面自洽）。
+- **变异自证（M-AG）**：删 `set_login_allow_group` 装载行 ⇒ 双牙齐红
+  （`login_loads_allow_group_switch_from_record` + `relogin_restores_allow_group_and_reinvite_succeeds`
+  均 panic，rc=101，6 passed / 2 failed）。
+- **门禁（全量，按本日教训）**：fmt rc=0；`cargo test -p game-svr --lib` 全绿；
+  clippy `-p game-svr --all-targets -D warnings` rc=0；msgcodegen rc=0（604 条）；散文锚 GREEN。
+  （world-bevy 本笔零改动——与 master 相同，master 侧已全量验证。）
+
+## 现象（登记时原文，存档）
 
 - **oracle**：登录恢复 `AllowGroup` 开关——`src/GameSrv/Word/WorldServer.cs:1146`
   `playObject.AllowGroup = humData.AllowGroup > 0;`（存侧 `:1294` 回写；Rust 存侧已于

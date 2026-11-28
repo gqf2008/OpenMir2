@@ -22566,11 +22566,18 @@ fn login_ctor_draws_for(
 ///   已解析）是**唯一初值来源**，之后只由 `@允许天地合一` 翻转
 ///   （`AllowGroupReCallCommand.cs:15`）。旧实现没有生产写点 ⇒ `@天地合一` 的成员允许门恒
 ///   false，测试手工置位掩盖了缺口（Important-2）。
+/// - `AllowGroup`：`WorldServer.cs:1146`
+///   `playObject.AllowGroup = humData.AllowGroup > 0;`——登录恢复「允许组队」开关
+///   （`CM_GROUPMODE` 翻转、`MakeSaveRcd` 回写；Rust 存侧 T-272/卡
+///   `openmir2-save-allowgroup-writeback` 已修 a46d3e3c3）。**旧实现缺载入点** ⇒ 重登后
+///   `allow_group=false`，组长重邀被 -4 拒（成员须手动重开）——卡
+///   `docs/issues/login-allowgroup-load-gap-20261129.md`（2026-11-29 总监授权修复）。
 pub(crate) trait LoginScalarTarget {
     /// `BaseObject.Dir`（S4c-2 起真值在 `AiState.ai`）。
     fn set_login_dir(&mut self, dir: u8);
     fn set_login_attack_mode(&mut self, mode: u8);
     fn set_login_allow_group_re_call(&mut self, allow: bool);
+    fn set_login_allow_group(&mut self, allow: bool);
 }
 
 impl LoginScalarTarget for mir2_world_bevy::EntitySpawn {
@@ -22583,6 +22590,9 @@ impl LoginScalarTarget for mir2_world_bevy::EntitySpawn {
     fn set_login_allow_group_re_call(&mut self, allow: bool) {
         self.allow_group_re_call = allow;
     }
+    fn set_login_allow_group(&mut self, allow: bool) {
+        self.allow_group = allow;
+    }
 }
 
 impl LoginScalarTarget for mir2_world_bevy::EntityMut<'_> {
@@ -22594,6 +22604,9 @@ impl LoginScalarTarget for mir2_world_bevy::EntityMut<'_> {
     }
     fn set_login_allow_group_re_call(&mut self, allow: bool) {
         self.group.allow_group_re_call = allow;
+    }
+    fn set_login_allow_group(&mut self, allow: bool) {
+        self.group.allow_group = allow;
     }
 }
 
@@ -22608,6 +22621,9 @@ fn apply_login_record_scalars(
     // `EntityMut` 经 `flags`）；记录侧非 0 的角色必须在这里落实体，否则战斗按 `HAM_ALL` 分派
     // （review `2c5cb955` m-1）。
     ent.set_login_attack_mode(data.map_or(0, |d| d.attatck_mode));
+    // `WorldServer.cs:1146`：`playObject.AllowGroup = humData.AllowGroup > 0;`——载侧缺口
+    // 修复（卡 `docs/issues/login-allowgroup-load-gap-20261129.md`，总监授权 2026-11-29）。
+    ent.set_login_allow_group(data.is_some_and(|d| d.allow_group > 0));
 }
 
 /// 帮 `ActorDisplay.dir` 随转向/走步更新（展示字段在 `bins/game-svr` 的展示表里，不进 `crates/world-bevy`）。
@@ -75399,24 +75415,21 @@ SendRefMsgRange=15
         );
     }
 
-    /// **DEV-HANDOFF-GROUP 残差机检衍生的载侧缺口牙（卡 `docs/issues/login-allowgroup-load-gap-20261129.md`）**：
-    /// 登录**不**恢复 `AllowGroup` 开关（oracle 恢复）——本牙钉住缺口现状，修复时第二段改写为绿。
+    /// **LOGIN-ALLOWGROUP-LOAD-GAP 行为牙（修复已落地，总监授权 2026-11-29）**：登录恢复
+    /// `AllowGroup` 开关（oracle 同形）。
     ///
-    /// 两个机检事实（2026-11-29，答总监「member 重登组关系是否从 DB 恢复」）：
-    /// 1. **组关系本体（owner/members）结构性不在 DB**：`record::CharacterData` 无
-    ///    `group_owner`/`group_members` 字段 ⇒ 谁也不可能从存档恢复成员关系；
-    ///    member 重登无组 = oracle 一致（离线即退组，`PlayObject.Message.cs:2138-2142`
-    ///    `MakeGhost` 里 `groupOwnerPlay.DelMember(this)`；重邀即回，非缺陷）。
-    /// 2. **`allow_group` 开关载侧缺口**：oracle 登录恢复（`WorldServer.cs:1146`
-    ///    `playObject.AllowGroup = humData.AllowGroup > 0;`；存侧 T-272 已修 a46d3e3c3），
-    ///    Rust 载入器 [`apply_login_record_scalars`] 只装 `Dir`/`AttatckMode`/`AllowGroupReCall`
-    ///    ⇒ 重登后 `allow_group=false` ⇒ 组长重邀被 -4 拒（target 未开允许组队），
-    ///    member 必须手动重开 `CM_GROUPMODE` 才能被邀。
+    /// 卡 `docs/issues/login-allowgroup-load-gap-20261129.md`。**修前钉缺口**（本牙前身
+    /// `login_does_not_load_allow_group_switch_from_record`：记录 `allow_group=1` 登录后
+    /// 实体仍 false ⇒ 缺口确认，1 passed）；修复后翻断言并改名——记录 `allow_group=1`
+    /// ⇒ 实体 `true`（oracle `WorldServer.cs:1146` `humData.AllowGroup > 0` 同形）。
     ///
-    /// 红检（将来修复）：`apply_login_record_scalars` 增加
-    /// `allow_group` 装载（`d.allow_group > 0`）⇒ 本牙第二段红（改名翻断言）。
+    /// 附带机检事实（同卡）：组关系本体（owner/members）结构性不在 DB ⇒ 重登无组 = oracle
+    /// 一致（离线即退组，`PlayObject.Message.cs` MakeGhost 内 `DelMember`）——非缺陷。
+    ///
+    /// 红检（变异）：删 `apply_login_record_scalars` 的 `set_login_allow_group` 行（或
+    /// `> 0` 改恒 false）⇒ 本牙红；`d.allow_group == 0` 的记录 ⇒ 实体 false（oracle 同形）。
     #[test]
-    fn login_does_not_load_allow_group_switch_from_record() {
+    fn login_loads_allow_group_switch_from_record() {
         let mut ent = new_player_entity("member".to_string(), 10, 10);
         let rec = record::CharacterData {
             allow_group: 1,
@@ -75424,12 +75437,28 @@ SendRefMsgRange=15
             ..record::CharacterData::default()
         };
         apply_login_record_scalars(&mut ent, Some(&rec));
-        // 对照面：装载器确实跑了（re_call 按列装载）⇒ 下面的缺口不是夹具错。
+        // 对照面：装载器确实跑了（re_call 按列装载）⇒ 下面的断言不是夹具错。
         assert!(ent.allow_group_re_call, "对照：re_call 装载正常");
-        // 缺口本体：记录 `allow_group=1`，登录后仍 false（oracle 在此为 true）。
+        // 修复本体：记录 `allow_group=1` ⇒ 实体 true（oracle `humData.AllowGroup > 0`）。
         assert!(
-            !ent.allow_group,
-            "载侧缺口（现状）：oracle 恢复 AllowGroup，Rust 不装 ⇒ 重邀被 -4 拒"
+            ent.allow_group,
+            "AllowGroup 必须随登录恢复（删 set_login_allow_group 行 ⇒ 本断言红，重邀被 -4 拒）"
+        );
+        // oracle 同形的反面：列 0 ⇒ false（`> 0` 语义，不是恒 true）。
+        let rec0 = record::CharacterData {
+            allow_group: 0,
+            ..record::CharacterData::default()
+        };
+        let mut ent0 = new_player_entity("member0".to_string(), 10, 10);
+        apply_login_record_scalars(&mut ent0, Some(&rec0));
+        assert!(!ent0.allow_group, "列 0 ⇒ false（>0 语义）");
+        // 无角色记录（`full == None`，oracle 不进 `GetHumData`）⇒ false（ctor 缺省）。
+        let mut ent_none = new_player_entity("member_none".to_string(), 10, 10);
+        ent_none.allow_group = true;
+        apply_login_record_scalars(&mut ent_none, None);
+        assert!(
+            !ent_none.allow_group,
+            "无记录 ⇒ 不置位（与 re_call 同口径）"
         );
         // 组关系本体：结构性不恢复（schema 无 owner/members；oracle 同为离线即退组）。
         assert_eq!(
@@ -75437,6 +75466,75 @@ SendRefMsgRange=15
             "成员关系不在 DB（oracle 离线即退组一致）"
         );
         assert!(ent.group_members.is_empty(), "同上");
+    }
+
+    /// **LOGIN-ALLOWGROUP-LOAD-GAP 端到端牙（总监节奏提示，2026-11-29）**：录
+    /// `allow_group=1` → 重登 → 实体开关恢复 + **组长重邀成功面**。
+    ///
+    /// 全链（生产件）：成员在场（旧实体，开关=ctor 缺省 false）→ 断线收口
+    /// （[`World::disconnect`]）→ 登录装载（生产入口 [`apply_login_record_scalars`]，带
+    /// `allow_group=1` 的记录）→ 进图（[`World::enter_map_at`]）⇒ 组长对其建组必须
+    /// `CreateGroupOk`（**修前此面是 -4**：target `allow_group=false`，见缺口卡）。
+    ///
+    /// 红检（变异）：删 `set_login_allow_group` 装载行 ⇒ 实体开关 false ⇒ `CreateGroupFail`
+    /// （-4）⇒ 本牙红。
+    #[test]
+    fn relogin_restores_allow_group_and_reinvite_succeeds() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+        // 组长：在场、未组队。
+        let _ = world.open_session("leader");
+        let leader = world
+            .enter_map_at("leader", new_player_entity("leader".into(), 5, 5), 0, 1_000)
+            .expect("组长进图");
+        // 成员：旧实体在场（开关=ctor 缺省 false——正是重登前的真实状态）。
+        let _ = world.open_session("member");
+        let old_member = world
+            .enter_map_at("member", new_player_entity("member".into(), 6, 5), 0, 1_000)
+            .expect("成员旧实体进图");
+        // 重登语义：断线收口 → 登录装载（录 allow_group=1）→ 进图。
+        world.disconnect("member").expect("成员断线");
+        let rec = record::CharacterData {
+            allow_group: 1,
+            ..record::CharacterData::default()
+        };
+        let mut ent = new_player_entity("member".into(), 6, 5);
+        apply_login_record_scalars(&mut ent, Some(&rec));
+        let member = world
+            .enter_map_at("member", ent, 0, 1_000)
+            .expect("成员重登进图");
+        assert_ne!(
+            member, old_member,
+            "新实体新 id（id 单调不复用的既定不变量）"
+        );
+        // 修复面：重登实体开关已按记录恢复。
+        assert!(
+            world.entities.get(member).expect("重登实体在").allow_group,
+            "重登后 allow_group=true（删 set_login_allow_group 行 ⇒ 本断言红）"
+        );
+        // 组长重邀成功面（修前：-4，target 未开允许组队）。
+        let events =
+            world.party_create_group(leader, "member", &mir2_world_bevy::PartyConfig::default());
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, mir2_world_bevy::PartyEvent::CreateGroupOk { .. })),
+            "重登后组长重邀必须成功（修前 CreateGroupFail -4）"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, mir2_world_bevy::PartyEvent::CreateGroupFail { .. })),
+            "不得有任何建组失败事件"
+        );
+        // 组面自洽：双方 owner 指组长（`party_join_group_em` 语义）。
+        assert_eq!(
+            world.entities.get(leader).expect("组长在").group_owner,
+            leader
+        );
+        assert_eq!(
+            world.entities.get(member).expect("成员在").group_owner,
+            leader
+        );
     }
 
     // ---------------------------------------------------------------------
