@@ -1289,6 +1289,7 @@ fn check_frame_order_scope(golden: &Value, stem: &str) -> Result<(), String> {
                 | "skill10"
                 | "amyounsul"
                 | "amyounsul2"
+                | "amyounsul-shape0"
                 | "groupamyounsul"
                 | "groupamyounsul2"
                 | "groupamyounsul-shape0"
@@ -1304,7 +1305,7 @@ fn check_frame_order_scope(golden: &Value, stem: &str) -> Result<(), String> {
         let ok = match stem {
             "fire" => mid == 9,
             "skill10" => mid == 10,
-            "amyounsul" | "amyounsul2" => mid == 6,
+            "amyounsul" | "amyounsul2" | "amyounsul-shape0" => mid == 6,
             "groupamyounsul"
             | "groupamyounsul2"
             | "groupamyounsul-shape0"
@@ -4592,9 +4593,22 @@ fn real_rust_ledger_amyounsul() {
 #[test]
 #[ignore = "需先跑 game-svr 驱动（amyounsul2_parity_*）生成真实台账"]
 fn real_rust_ledger_amyounsul2() {
+    // **MG-15 ②（2026-11-28）**：`prebuff_red` = 红毒 0x40000000 位路径。
     real_ledger_verify_labels(
         "amyounsul2",
         &golden_file("amyounsul2.json"),
+        &["s1", "s5", "s13", "prebuff_red"],
+    );
+}
+
+/// **`MG-15 ①`（2026-11-28）**：单目标臂 Shape=0 stem 比较器（fall-through：不投毒、
+/// 护身符照扣、训练尾 640 在）。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（amyounsul_shape0_parity_*）生成真实台账"]
+fn real_rust_ledger_amyounsul_shape0() {
+    real_ledger_verify_labels(
+        "amyounsul-shape0",
+        &golden_file("amyounsul-shape0.json"),
         &["s1", "s5", "s13"],
     );
 }

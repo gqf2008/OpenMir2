@@ -167,3 +167,13 @@ MG-13 主链位号面共用该例）。装置 target-prebuff 复用（零新装�
 护身符 Shape>2（③-C 生产不可达）与 Shape 0（归 MG-15 旋钮批）。MG-15 随后
 （amulet_shape 旋钮 + 红臂 0x40000000 例）。
 
+**MG-15 落地（2026-11-28，card/items-scope-triage，openmir2-10）**：两面全落——① **Shape 0
+旋钮**：装置新 stem `amyounsul-shape0`（AmuletShape=0 放开，产 `amyounsul-shape0.json`
+新金标）× s1/s5/s13，单目标臂 fall-through 面（不投毒零 8037 / 护身符照扣 642=500 /
+训练尾 640 在）；② **红臂 0x40000000 位路径**：amyounsul2 新支 `prebuff_red`（目标预挂
+一条非毒 buff ⇒ 红毒落位 1 ⇒ 10139.p1=0xC0000000 含推算位）。变异两组（红→还原）：
+产品 match 加 0 臂 ⇒ shape0 红；`get_buff_status` 位号恒 0 ⇒ prebuff_red/prebuff_bit2
+双红（第一版改 wParam 毒型不咬——位号来自 buff 插入序，诚实记录为非有效变异）。
+还原后同 id（mg15-final）11 驱动 + 三比较器全绿。MG-13/14/15 三条 residual 均只剩
+Shape>2 ③-C（生产不可达）⇒ 可一并升满（46→43，待总监复验本笔后落账）。
+

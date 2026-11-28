@@ -521,7 +521,17 @@ public static class Program
                 // `prebuff_double` 同构）。IdBase 7100。
                 new ExtraCaseSpec { Label = "prebuff_bit2", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 }, new BuffSpec { Type = 3, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 7100 }
             } });
-            if (name == "amyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape2", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            if (name == "amyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape2", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", ExtraCases = new[] {
+                // **MG-15 ②（2026-11-28，① 档）**：红毒 `0x40000000` 位路径——目标预挂一条非毒 buff
+                //（Defense=2 占位 0）⇒ 红毒落位 1 ⇒ `10139.p1 = 0xC0000000`（含推算位 0x40000000；
+                // 既有三支恒 int.MinValue 不含该位）。target-prebuff 机制复用。IdBase 7200。
+                new ExtraCaseSpec { Label = "prebuff_red", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 7200 }
+            } });
+            // **MG-15 ①（2026-11-28，① 档）**：单目标臂 Shape=0 fall-through——`switch` 无 default ⇒
+            // 不投毒（零 8037），但 `CheckAmulet`/`UseAmulet` 与 `boTrain`（race 门）在 switch 之外 ⇒
+            // 护身符照扣、训练尾 640 在（与 groupamyounsul-shape0 同构）；生成器 `AmuletShape=0`
+            // 旋钮就此放开。产 `amyounsul-shape0.json`。
+            if (name == "amyounsul-shape0") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape0", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 0, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", AmyOunsulPoint = 15 });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", ExtraCases = new[] {
                 // **MG-50（2026-11-26）**：范围边界——obs_in 在 click (101,100) 的 Chebyshev 距离 4。
                 // `MAX(1, Lv)` 方框：Lv1 不含（无 8037）、Lv4 含（有 8037）。

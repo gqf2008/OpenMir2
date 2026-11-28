@@ -88337,6 +88337,7 @@ SendRefMsgRange=15
             stem,
             "amyounsul"
                 | "amyounsul2"
+                | "amyounsul-shape0"
                 | "groupamyounsul"
                 | "groupamyounsul2"
                 | "groupamyounsul-shape0"
@@ -88353,7 +88354,7 @@ SendRefMsgRange=15
             });
             // **MG-50（2026-11-26）**：`groupamyounsul-shape0` 是**有意的 fall-through 臂**
             // （switch 无 default ⇒ 不投毒、`result` 仍 true）；其余 stem 仍只许 1/2。
-            let shape0_arm = stem == "groupamyounsul-shape0";
+            let shape0_arm = stem == "groupamyounsul-shape0" || stem == "amyounsul-shape0";
             assert!(
                 matches!(shape, 1 | 2) || (shape == 0 && shape0_arm),
                 "[{stem}/{label}] Fixture.amulet_shape={shape} 必须是 1 或 2（仅 shape0 臂允许 0；0 会退化成不投毒）"
@@ -96531,6 +96532,77 @@ SendRefMsgRange=15
         b1_golden_drain_assert(&format!("{stem}.json"), label, 3);
     }
 
+    /// **`MG-15 ①` shape0 臂**（`AmuletShape=0`，单目标 6）：`switch` 无匹配分支 ⇒ 不投毒
+    /// （零 8037），但 `CheckAmulet`/`UseAmulet` 与 `boTrain`（race 门）在 switch 之外 ⇒
+    /// 护身符照扣、训练尾 640 在（与 groupamyounsul-shape0 同构）。
+    fn amyounsul_shape0_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("amyounsul-shape0", 6, 1, label, seed, base);
+        let case = read_ledger_case("amyounsul-shape0", label)[0].clone();
+        let total_8037: usize = case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| rm_count(&case, r["Who"].as_str().unwrap(), 8037))
+            .sum();
+        assert_eq!(
+            total_8037, 0,
+            "Shape=0 ⇒ switch 无匹配分支，不投毒（零 8037）"
+        );
+        assert_eq!(
+            sent_recogs(&case, "caster", 642),
+            vec![500],
+            "Shape=0 仍扣护身符（642.recog = 扣后 Dura 500）"
+        );
+        assert_eq!(
+            sent_params(&case, "caster", 640),
+            vec![1],
+            "boTrain 在 switch 之外赋值 ⇒ 训练尾 640 仍在"
+        );
+        poison_per_receiver_frame_matches_golden("amyounsul-shape0", label);
+        fireball_case_assert("amyounsul-shape0", label);
+        let passes = golden_case_for("amyounsul-shape0", label)["DrainPasses"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("[amyounsul-shape0/{label}] golden 缺 DrainPasses"))
+            as i64;
+        b1_golden_drain_assert("amyounsul-shape0.json", label, passes);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul_shape0_parity_s1() {
+        amyounsul_shape0_assert("s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul_shape0_parity_s5() {
+        amyounsul_shape0_assert("s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul_shape0_parity_s13() {
+        amyounsul_shape0_assert("s13", 13, 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul2_parity_prebuff_red() {
+        // **MG-15 ②（2026-11-28，① 档）**：红毒 `0x40000000` 位路径——目标预挂一条非毒 buff
+        //（Defense=2 占位 0）⇒ 红毒落位 1 ⇒ `10139.p1 = 0xC0000000`（-1073741824，含推算位
+        // `0x40000000`；既有三支恒 int.MinValue 不含该位）。`pre_buff_status = 0x80000000`
+        // 两侧同判据（驱动 pre_buffs 夹具块）。
+        amyounsul_assert("amyounsul2", 6, "prebuff_red", 1, 7200);
+        let c = read_ledger_case("amyounsul2", "prebuff_red")[0].clone();
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(
+                rm_params(&c, who, 10139),
+                vec![-1073741824],
+                "[{who}] 10139.p1 = 0xC0000000（预 buff 位 0 + 红毒位 1，含 0x40000000 推算位）"
+            );
+        }
+    }
+
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn amyounsul_parity_prebuff_bit2() {
@@ -96612,7 +96684,7 @@ SendRefMsgRange=15
             .join("../../tests/parity/golden/magic");
         // **点名集合**（不是魔法数字）：每份毒 golden 的 case 组必须**逐名相等**——
         // 少一支红、多一支也红；新增臂必须写进这张表（MG-50 追加 5 臂时漏改此处 ⇒ 默认门红）。
-        let specs: [(&str, &[&str], &[u64], i64); 6] = [
+        let specs: [(&str, &[&str], &[u64], i64); 7] = [
             // **MG-13/14 位号面（2026-11-28）**：`prebuff_bit2` = 单目标臂跨 buff 位号
             // （两条预 buff ⇒ 绿毒落位 2 ⇒ 0xE0000000）。
             (
@@ -96621,7 +96693,16 @@ SendRefMsgRange=15
                 &[1, 2],
                 15,
             ),
-            ("amyounsul2.json", &["s1", "s5", "s13"], &[1, 2], 15),
+            // **MG-15 ②（2026-11-28）**：红毒 `0x40000000` 位路径（一条预 buff ⇒ 红毒落位 1
+            // ⇒ 0xC0000000，含推算位）。
+            (
+                "amyounsul2.json",
+                &["s1", "s5", "s13", "prebuff_red"],
+                &[1, 2],
+                15,
+            ),
+            // **MG-15 ①（2026-11-28）**：单目标臂 Shape=0 fall-through（不投毒、训练尾 640 在）。
+            ("amyounsul-shape0.json", &["s1", "s5", "s13"], &[0], 15),
             (
                 "groupamyounsul.json",
                 &[
@@ -96706,8 +96787,8 @@ SendRefMsgRange=15
             }
         }
         assert_eq!(
-            seen, 29,
-            "必须逐支检查 29 支（4+3+11+3+3+5；MG-64/65 非 target 扩展 +2、MG-13/14 位号面 +1）"
+            seen, 33,
+            "必须逐支检查 33 支（4+4+11+3+3+4+5；MG-64/65 +2、MG-13/14 +1、MG-15 +3）"
         );
     }
 
