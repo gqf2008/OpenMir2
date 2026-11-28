@@ -111,6 +111,22 @@ pub fn send_ref_msg_targets_at_impl<A: crate::entity::EntityAccess>(
     out
 }
 
+/// **DEV-HANDOFF-GROUP（路线②，总监裁定 2026-11-29）**：失败跨区迁移回滚时暂存的组关系。
+///
+/// `restore_session`（`bins/game-svr`）把搬迁包捕获的 `GroupState` 连同**暂存时刻的旧
+/// actor id** 存到会话侧（七表外——会话对象从不删除，暂存跨重登存活）；源区重建实体
+/// （再登录）时由宿主 `apply_pending_group_restore_for` **恰一次**取走（`take`）。
+/// 旧 id 必须随包暂存：重建实体必然拿到**新** id（actor id 单调不复用是成文不变量），
+/// 组长自引用（`group_owner == 旧自id`、名单含旧自id）要按它重映射，否则 owner 判定
+/// （`party_group_owner_of(actor) != actor`）失败、重建后的组长无法管理本组。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingGroupRestore {
+    /// 暂存时刻该角色的 actor id（回滚会话里 `actor_id` 指的那个，实体已不存在）。
+    pub old_actor_id: i32,
+    /// 捕获到的组关系（`GroupState::default()` = 无组）。
+    pub group: crate::components::GroupState,
+}
+
 /// 世界侧会话阶段（世界能观测到的子集）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorldStage {
@@ -137,6 +153,12 @@ pub struct Session {
     /// （`PlayObject.Base.cs` 的 `SendServerConfig`：`SoftVersionDateEx == 0` ⇒ return）——
     /// 漏设某条建立/同步路径时，失败方向是「少一帧」而不是「发出错版本值」。
     pub soft_version_date: i32,
+    /// **DEV-HANDOFF-GROUP（路线②，总监裁定 2026-11-29）**：失败跨区迁移回滚时暂存的组关系。
+    ///
+    /// 见 [`PendingGroupRestore`]：`restore_session` 写入、登录重建时恰一次消费；
+    /// `None` = 无待恢复（常态）。`allow_group_re_call` 不在暂存/恢复之列：oracle 口径
+    /// 来自存档记录（`apply_login_record_scalars`，`WorldServer.cs:1159`）。
+    pub pending_group_restore: Option<PendingGroupRestore>,
 }
 
 impl Session {
@@ -148,6 +170,7 @@ impl Session {
             stage: WorldStage::NotInWorld,
             soft_close_count: 0,
             soft_version_date: 0,
+            pending_group_restore: None,
         }
     }
 }
