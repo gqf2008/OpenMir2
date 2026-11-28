@@ -1,10 +1,51 @@
-# DEV-HANDOFF-LIMBO — 失败迁移回滚后的会话僵尸态：断线后重登被永久拒（新登记，待裁决）
+# DEV-HANDOFF-LIMBO — 失败迁移回滚后的会话僵尸态：断线后重登被永久拒（**已修，路线①+②**）
 
 > 登记日：2026-11-29。登记来源：DEV-HANDOFF-GROUP 路线②实施期间按总监令单独登记
 > （「僵尸会话问题不在本笔范围……单独登记新卡报我」）。板外文件卡（非 parity 台账，
 > 非 `whitelist.md` / `parity-gap-*.json`）。
 > 本文件与 `docs/issues/dev-handoff-group-loss-20261126.md` 同根缺陷族（失败跨区迁移），
 > 但缺陷面不同（会话生命周期 vs 组关系），分卡追踪。
+>
+> **收口状态（2026-11-29）**：总监确认生产级严重度并授权修复（路线①+②）；已落地送审，
+> 见下方「修复」节；「现象/证据链/待裁决」为登记时原文（存档，「待裁决」已被授权裁定取代）。
+
+## 修复（路线①+②，总监授权 2026-11-29；分支 `card/dev-handoff-limbo-fix`）
+
+- **路线①（断线段）**：world-bevy `leave_world_inner` 新增 limbo 支——会话 `InWorld` 但实体
+  缺席时，硬断线（`disconnect`）按移除门收口（`stage=Left` + `actor_id=None`，无广播无格摘）；
+  `soft_close` 不走此支（ghost 语义需要实体，维持 `NotInWorld`）。oracle 无此态、纯自研
+  机制无 parity 约束。
+- **路线②（重登段，两半）**：宿主 `finish_login` 预检 `in_world` 与 world-bevy
+  `enter_map_at` 的 `AlreadyInWorld` 守卫**同口径**带实体在场判据——「InWorld 但实体缺席」
+  按「未在世界」放行重建（`enter_map_at` 的 F1 移除门收走死引用）。实体在场的真 InWorld
+  仍按已登录处理（oracle 同形：关新+踢旧）。
+- **路线③（`drain_kicks` 强清）：不需要**。理由：踢旧路径唯一 failing 步是 `world.disconnect`
+  （limbo 时 Err），路线①已使其成功复位；`drain_kicks` 的 online 坐标前提在「能触发踢旧」
+  的所有场景（online 项在场）天然满足——顶号踢旧走 `drain_kicks` → `disconnect`（路线①），
+  stage 正常收口。
+- **行为牙（锁死循环本体，修前红/修后绿）**：
+  - `l2_handoff_tests::limbo_session_does_not_lock_out_relogin`：两区夹具失败迁移 → 回滚
+    limbo → **真的区 k Closed 臂**（`handle_zone_closed`）→ 断言 stage 复位（路线①）→
+    **真的进图口**（`enter_map_at`）重登放行（路线②守卫）+ `finish_login` 预检源码锚点。
+  - `l2_handoff_tests::enter_map_allows_rebuild_over_limbo_session`：守卫半隔离牙（在线
+    limbo 期间重复登录走的口）。
+  - 修前红：`limbo_session_does_not_lock_out_relogin` rc=101（stage 停 InWorld，DBG 原文
+    「关闭但未在世界」）。
+  - 修后绿：2 passed / 0 failed。
+  - 变异自证：M-L1 删路线① limbo 支 ⇒ rc=101（① 红 InWorld ≠ Left）；M-L2 预检删实体
+    判据 ⇒ rc=101（源码锚红）；M-L3 守卫删实体判据 ⇒ rc=101（隔离牙红 AlreadyInWorld）。
+- **顺带修复（诚实披露）**：全量门禁暴露 `entry_telemetry_wiring::ok_counter_sits_in_enter_map_ok_arm`
+  红——系**已并的组修复**（18547534c）把 `apply_pending_group_restore_for` 插在 `enter_map_at`
+  Ok 臂首位、中文注释 UTF-8 字节把 `record_ok` 推出该锚点牙的 800 字节窗；**master
+  755363437 上即红**（上笔交付只复跑了定向牙、全量未跑，本笔认领）。修法：组恢复调用挪到
+  `record_ok` 块之后（语义等价），锚点牙意图（`record_ok` 在 Ok 臂内、clock 基准）保持；
+  修复后该牙绿。
+- **门禁（本笔全量）**：fmt rc=0；`cargo test -p game-svr --lib` = **2664 passed / 0 failed**；
+  `cargo test -p mir2-world-bevy --lib` = **945 passed / 0 failed**；clippy `-p game-svr`
+  rc=0（修掉一处新牙的 `unnecessary_get_then_check`）；clippy `-p mir2-world-bevy` rc=0；
+  msgcodegen rc=0（604 条）。
+
+## 现象（登记时原文，存档）
 
 ## 现象（实施中观察到的玩家可见面）
 
@@ -40,7 +81,7 @@
 触发后该角色永久无法登录。**limbo 态在 master 现状即存在**（b1 已并 d2ee5aa8a 后暴露），
 不是路线②修复引入；路线②的组恢复依赖「重登重建」打通，limbo 修复是其自然互补。
 
-## 待裁决（修复候选，需总监定）
+## 待裁决（已被授权裁定取代；存档）
 
 - 候选①：`disconnect` 对「会话在世界但实体缺席」的 limbo 支做 stage 复位（Left +
   actor_id=None；oracle 无此态、纯自研机制无 parity 约束）；
