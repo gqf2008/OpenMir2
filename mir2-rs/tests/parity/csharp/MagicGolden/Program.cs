@@ -3055,7 +3055,18 @@ private static int ReadInstanceInt(object obj, string fieldName)
         var c3 = RunMagicCase(spec, "mon_blocked_master", 1, 3000, spec.TargetMaxHp, false);
         spec.Monsters = new[] { Mon(102, 100, 1), Mon(101, 101, 200) };
         var c4 = RunMagicCase(spec, "mon_partial", 1, 4000, spec.TargetMaxHp, false);
-        return EmitGolden(spec, new[] { c1, c2, c3, c4 });
+        // **MG-23（2026-11-28，① 档低优先收尾）**：等级比较面的**幅度足够 + 台账可见**例——
+        // 单只 level=100 怪：`CasterLevelOverride=210` ⇒ `draw + (210 - 1) > 100` 对任意
+        // draw∈[0,3] 恒真 ⇒ `result=1` ⇒ 训练尾 **640 在**（台账可见面）；对照：同怪在
+        // 部署 caster 30 下 `29+draw ≤ 32 < 100` 必不中 ⇒ result=0 ⇒ 无 640（即
+        // `mon_blocked_level` 的形态）。B15 判定推导：draw∈[0,3] 最坏需 `caster_level ≥ 202`。
+        // IdBase 4600。
+        spec.Monsters = new[] { Mon(102, 100, 100) };
+        spec.CasterLevel = 210;
+        var c5 = RunMagicCase(spec, "mon_high_caster_level_hit", 1, 4600, spec.TargetMaxHp, false);
+        spec.CasterLevel = 30;
+        spec.Monsters = new[] { Mon(102, 100, 1), Mon(101, 101, 1) };
+        return EmitGolden(spec, new[] { c1, c2, c3, c4, c5 });
     }
 
     /// <summary>

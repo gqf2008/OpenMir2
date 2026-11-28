@@ -2902,6 +2902,9 @@ fn real_rust_ledger_holyshield() {
             "mon_blocked_level",
             "mon_blocked_master",
             "mon_partial",
+            // **MG-23（2026-11-28，① 档收尾）**：caster_level=210 ⇒ 等级比较面幅度足够
+            // （draw+209 > 100 恒真 ⇒ level=100 怪中盾 ⇒ result=1 ⇒ 训练尾 640 在——台账可见面）。
+            "mon_high_caster_level_hit",
         ],
         true,
     );

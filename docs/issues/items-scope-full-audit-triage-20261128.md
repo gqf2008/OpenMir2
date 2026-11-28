@@ -222,3 +222,14 @@ time10）按总监新纪律升满先报裁定。
 IT-17、MG-64/65、MG-13/14、MG-15、MG-48、MG-59 U-1/U-2）+ MG-46 改判 ③-C；MG-23 收尾
 待做。余量=IT-17/MG-48 的他卡阻塞升满 + ② 档 2 卡 + 三张真未覆面归他卡项。
 
+**MG-23 落地 + 升满（2026-11-28，card/items-scope-triage，openmir2-10）**：holyshield 装置
+新支 `mon_high_caster_level_hit`（CasterLevelOverride=210 + 单只 level=100 怪）——
+`draw + (210-1) > 100` 恒真 ⇒ result=1 ⇒ 训练尾 640 在（**台账可见面**：部署 caster 30 下
+同怪必不中 ⇒ 无 640，mon_blocked_level 形态）；golden 另记 mon0 60005 盾态帧。变异
+（caster_level 覆写旁路）⇒ 驱动级逐收件人帧序红（caster 640 缺）；还原后同 id 5 驱动 +
+比较器全绿。MG-23 scope=full（删键）。**① 档 16 条全部落地/改判完毕**。
+
+—— **① 档落地收官（2026-11-28，openmir2-10）**：16 条 = 15 条点亮落地 + MG-46 改判
+③-C；三笔待复验（MG-59 b24794b22 已并、MG-23 本笔）；他卡阻塞升满 2 条（IT-17/MG-48，
+B 类签收后）+ ② 档 2 卡（MG-12、MG-59 U-3）+ 归他卡项不在本车道。
+

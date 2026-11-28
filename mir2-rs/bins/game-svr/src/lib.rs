@@ -95363,6 +95363,16 @@ SendRefMsgRange=15
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn holyshield_parity_mon_high_caster_level_hit() {
+        // **MG-23（2026-11-28，① 档收尾）**：等级比较面幅度足够 + 台账可见——单只 level=100
+        // 怪：`CasterLevelOverride=210` ⇒ `draw + (210 - 1) > 100` 恒真 ⇒ `result=1` ⇒ 训练尾
+        // **640 在**（部署 caster 30 下同怪 `29+draw <= 32 < 100` 必不中 ⇒ 无 640）。+1/+50
+        // 幅度不足不可观测（B15 判定推导）。
+        holyshield_assert("mon_high_caster_level_hit", 4600);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn holyshield_parity_mon_partial() {
         holyshield_assert("mon_partial", 4000);
     }
